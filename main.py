@@ -2362,6 +2362,7 @@ async def admin_plan_create_handler(query: CallbackQuery, state: FSMContext) -> 
         "Envie os dados do plano neste formato:\n\n"
         "<code>Nome do plano | plano ou privado | dias | valor</code>\n"
         "<code>Nome do grupo | grupo | dias | valor</code>\n\n"
+        "Envie um plano por linha para criar vários de uma vez.\n\n"
         "Exemplo: <code>Mensal | plano | 30 | 19.90</code>",
         reply_markup=cancel_keyboard(),
     )
@@ -2372,21 +2373,30 @@ async def admin_plan_create_handler(query: CallbackQuery, state: FSMContext) -> 
 async def receive_plan_create_handler(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
-    parts = [part.strip() for part in message.text.split("|")]
-    if len(parts) != 4:
-        return await message.answer("❌ Use: <code>Nome | plano ou grupo | dias | valor</code>", reply_markup=cancel_keyboard())
-    name, category_text, days_text, price_text = parts
-    category = "user" if category_text.lower() in {"plano", "privado", "publico", "público", "user", "usuario", "usuário"} else "group" if category_text.lower() in {"grupo", "group"} else ""
-    try:
-        duration_days = int(days_text)
-        price = float(price_text.replace(",", "."))
-    except ValueError:
-        return await message.answer("❌ Dias e valor precisam ser números válidos.", reply_markup=cancel_keyboard())
-    if not name or not category or duration_days <= 0 or price <= 0:
-        return await message.answer("❌ Informe nome, tipo válido, dias e valor maiores que zero.", reply_markup=cancel_keyboard())
-    await create_plan(name, category, duration_days, price)
+    lines = [line.strip() for line in message.text.splitlines() if line.strip()]
+    if not 1 <= len(lines) <= 20:
+        return await message.answer("❌ Envie de 1 até 20 planos, um por linha.", reply_markup=cancel_keyboard())
+
+    plans_to_create: list[tuple[str, str, int, float]] = []
+    for line_number, line in enumerate(lines, start=1):
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 4:
+            return await message.answer(f"❌ Linha {line_number}: use <code>Nome | plano ou grupo | dias | valor</code>", reply_markup=cancel_keyboard())
+        name, category_text, days_text, price_text = parts
+        category = "user" if category_text.lower() in {"plano", "privado", "publico", "público", "user", "usuario", "usuário"} else "group" if category_text.lower() in {"grupo", "group"} else ""
+        try:
+            duration_days = int(days_text)
+            price = float(price_text.replace(",", "."))
+        except ValueError:
+            return await message.answer(f"❌ Linha {line_number}: dias e valor precisam ser números válidos.", reply_markup=cancel_keyboard())
+        if not name or not category or duration_days <= 0 or price <= 0:
+            return await message.answer(f"❌ Linha {line_number}: informe nome, tipo válido, dias e valor maiores que zero.", reply_markup=cancel_keyboard())
+        plans_to_create.append((name, category, duration_days, price))
+
+    for name, category, duration_days, price in plans_to_create:
+        await create_plan(name, category, duration_days, price)
     await state.clear()
-    await message.answer("✅ Plano criado.", reply_markup=plans_admin_keyboard(await get_plans()))
+    await message.answer(f"✅ {len(plans_to_create)} plano(s) criado(s).", reply_markup=plans_admin_keyboard(await get_plans()))
 
 
 @router.callback_query(F.data.startswith("admin:plan:"))
