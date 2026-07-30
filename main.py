@@ -1061,7 +1061,15 @@ async def send_query_result(
     filename: str,
     user,
     bot_username: str,
+    delivery_only: bool = False,
 ) -> Message:
+    if delivery_only:
+        await status_message.edit_text(
+            "<b>✅ Consulta concluída</b>\n\n"
+            "Use um dos botões abaixo para ver seu resultado com privacidade.",
+            reply_markup=reply_markup,
+        )
+        return status_message
     plain_text = html_to_plain_text(text)
     if len(plain_text) <= 3900:
         await status_message.edit_text(text, reply_markup=reply_markup)
@@ -2847,6 +2855,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
         query_result_filename(value),
         message.from_user,
         bot_me.username or "",
+        delivery_only=bool(RESULTS_API_SECRET and WEB_RESULTS_URL),
     )
     schedule_query_cleanup(message, result_message)
 
@@ -2912,6 +2921,7 @@ async def chassi_handler(message: Message) -> None:
         query_result_filename(chassi),
         message.from_user,
         bot_me.username or "",
+        delivery_only=bool(RESULTS_API_SECRET and WEB_RESULTS_URL),
     )
     schedule_query_cleanup(message, result_message)
 
