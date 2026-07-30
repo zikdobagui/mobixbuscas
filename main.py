@@ -1011,6 +1011,21 @@ def is_html_error_response(data: object) -> bool:
     return normalized.startswith("<!doctype html") or normalized.startswith("<html")
 
 
+def parse_api_response(body: str) -> object:
+    """Aceita JSON normal e o formato incompleto retornado por algumas bases."""
+    normalized = body.lstrip("\ufeff \t\r\n")
+    try:
+        return json.loads(normalized)
+    except json.JSONDecodeError:
+        # Algumas rotas retornam os pares JSON sem as chaves externas.
+        if normalized.startswith('"') and normalized.rstrip().endswith("}"):
+            try:
+                return json.loads("{" + normalized)
+            except json.JSONDecodeError:
+                pass
+        return body
+
+
 def parse_api_error_body(body: str) -> object:
     try:
         return json.loads(body)
@@ -1412,10 +1427,7 @@ async def request_misticpay_json(
         )
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            data = body
+        data = parse_api_response(body)
         if is_html_error_response(data):
             raise ValueError("A base retornou uma página HTML de erro.")
         return data
@@ -1798,10 +1810,7 @@ async def fetch_api_data(
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            data = body
+        data = parse_api_response(body)
         if is_html_error_response(data):
             raise ValueError("A base retornou uma página HTML de erro.")
         return data
@@ -1869,10 +1878,7 @@ async def fetch_chassi_data(api_base_url: str, api_key: str, chassi: str) -> obj
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            data = body
+        data = parse_api_response(body)
         if is_html_error_response(data):
             raise ValueError("A base retornou uma página HTML de erro.")
         return data
