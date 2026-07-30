@@ -258,7 +258,7 @@ API_COMMANDS = [
         "example": "00005683505",
     },
     {
-        "aliases": ["fotope"],
+        "aliases": ["foto1"],
         "title": "Consulta Foto PE v1",
         "path": "api/consulta/fotope/v1",
         "param": "nome",
@@ -290,15 +290,21 @@ API_COMMAND_LOOKUP = {
 # obrigar o usuário a reenviar o comando. As consultas sem alternativa seguem
 # usando apenas a base escolhida.
 FALLBACK_COMMAND_GROUPS = {
-    "cpf": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "cpf1": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "cpf2": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "cpf3": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "cpf4": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "cpf5": ("cpf", "cpf2", "cpf3", "cpf4"),
-    "nome": ("nome", "nome2"),
-    "nome1": ("nome", "nome2"),
-    "nome2": ("nome", "nome2"),
+    "cpf": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpf1": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpf2": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpf3": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpf4": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpf5": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
+    "cpfsus": ("cpfsus", "cpf", "cpf2", "cpf3", "cpf4", "score", "inss", "foto"),
+    "score": ("score", "cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "inss", "foto"),
+    "inss": ("inss", "cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "foto"),
+    "foto": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpfsus", "score", "inss"),
+    "fotonacional": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpfsus", "score", "inss"),
+    "fotope": ("fotope", "nome", "nome2"),
+    "nome": ("nome", "nome2", "fotope"),
+    "nome1": ("nome", "nome2", "fotope"),
+    "nome2": ("nome", "nome2", "fotope"),
     "placa": ("placa", "placa2", "placa3"),
     "placa1": ("placa", "placa2", "placa3"),
     "placa2": ("placa", "placa2", "placa3"),
@@ -306,6 +312,8 @@ FALLBACK_COMMAND_GROUPS = {
     "telefone": ("telefone", "telefone2"),
     "telefone1": ("telefone", "telefone2"),
     "telefone2": ("telefone", "telefone2"),
+    "cnpj": ("cnpj", "cnpjfgts"),
+    "cnpjfgts": ("cnpjfgts", "cnpj"),
 }
 FALLBACK_TIMEOUT_SECONDS = 12
 
@@ -1818,16 +1826,27 @@ async def fetch_api_data(
     return await asyncio.to_thread(_request)
 
 
-def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict]:
+async def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict]:
     aliases = FALLBACK_COMMAND_GROUPS.get(command_name, ())
     candidates = [API_COMMAND_LOOKUP[alias] for alias in aliases if alias in API_COMMAND_LOOKUP]
     ordered = [primary_spec, *[candidate for candidate in candidates if candidate is not primary_spec]]
     unique_paths: set[str] = set()
-    return [
+    unique_candidates = [
         candidate
         for candidate in ordered
         if not (candidate["path"] in unique_paths or unique_paths.add(candidate["path"]))
     ]
+    bases = await get_bases()
+    configured = {
+        extract_command_name_from_base(base): bool(base.get("online"))
+        for base in bases
+        if extract_command_name_from_base(base)
+    }
+    online_candidates = [
+        candidate for candidate in unique_candidates
+        if configured.get(candidate["aliases"][0], True)
+    ]
+    return online_candidates or unique_candidates
 
 
 async def fetch_api_data_with_fallback(
@@ -1838,7 +1857,7 @@ async def fetch_api_data_with_fallback(
     value: str,
     status_message: Message,
 ) -> object:
-    candidates = fallback_specs_for(command_name, primary_spec)
+    candidates = await fallback_specs_for(command_name, primary_spec)
     last_error: Exception | None = None
 
     for index, candidate in enumerate(candidates):
@@ -1850,7 +1869,7 @@ async def fetch_api_data_with_fallback(
                 value,
                 timeout=FALLBACK_TIMEOUT_SECONDS if index < len(candidates) - 1 else 60,
             )
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, ValueError) as error:
             last_error = error
             if index == len(candidates) - 1:
                 break
