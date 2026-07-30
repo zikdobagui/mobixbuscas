@@ -67,6 +67,15 @@ DEFAULT_START = (
     "Seu ID: <code>{user_id}</code>"
 )
 
+DEFAULT_NEW_USER_REFERENCE_TEXT = (
+    "<b>👤 Novo usuário registrado</b>\n\n"
+    "Usuário: {MENTION}\n"
+    "ID: <code>{ID}</code>\n"
+    "Username: <code>{USERNAME}</code>\n"
+    "Entrada: <code>{DATE} {TIME}</code>"
+)
+REFERENCE_BUTTON_COLORS = ("🟦", "🟩", "🟥", "⬛")
+
 DEFAULT_BUTTONS = [
     {"text": "Bases", "url": "", "emoji_id": "", "style": "primary", "row": 0, "action": "bases"},
     {"text": "Perfil", "url": "", "emoji_id": "", "style": "primary", "row": 0},
@@ -277,7 +286,30 @@ API_COMMAND_LOOKUP = {
     for alias in spec["aliases"]
 }
 
-HIDDEN_RESPONSE_FIELDS = {"status", "resposta", "developer", "developer2"}
+# Quando uma versão estiver lenta, tenta as demais versões compatíveis sem
+# obrigar o usuário a reenviar o comando. As consultas sem alternativa seguem
+# usando apenas a base escolhida.
+FALLBACK_COMMAND_GROUPS = {
+    "cpf": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "cpf1": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "cpf2": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "cpf3": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "cpf4": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "cpf5": ("cpf", "cpf2", "cpf3", "cpf4"),
+    "nome": ("nome", "nome2"),
+    "nome1": ("nome", "nome2"),
+    "nome2": ("nome", "nome2"),
+    "placa": ("placa", "placa2", "placa3"),
+    "placa1": ("placa", "placa2", "placa3"),
+    "placa2": ("placa", "placa2", "placa3"),
+    "placa3": ("placa", "placa2", "placa3"),
+    "telefone": ("telefone", "telefone2"),
+    "telefone1": ("telefone", "telefone2"),
+    "telefone2": ("telefone", "telefone2"),
+}
+FALLBACK_TIMEOUT_SECONDS = 12
+
+HIDDEN_RESPONSE_FIELDS = {"status", "resposta", "developer", "developer2", "base64"}
 
 BASE_COMMAND_EXAMPLES = {
     "cpf": "cpf",
@@ -351,6 +383,16 @@ async def setup_database() -> None:
             await database.execute("ALTER TABLE settings ADD COLUMN payment_logs_channel_id TEXT")
         if "force_join_enabled" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN force_join_enabled INTEGER")
+        if "new_user_reference_text" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_text TEXT")
+        if "new_user_reference_photo_file_id" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_photo_file_id TEXT")
+        if "new_user_reference_button_text" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_button_text TEXT")
+        if "new_user_reference_button_url" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_button_url TEXT")
+        if "new_user_reference_button_color" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_button_color TEXT")
         await database.execute(
             "INSERT OR IGNORE INTO settings(id, start_text) VALUES(1, ?)",
             (DEFAULT_START,),
@@ -394,6 +436,18 @@ async def setup_database() -> None:
         await database.execute(
             "UPDATE settings SET force_join_enabled = ? WHERE force_join_enabled IS NULL",
             (0,),
+        )
+        await database.execute(
+            "UPDATE settings SET new_user_reference_text = ? WHERE new_user_reference_text IS NULL",
+            (DEFAULT_NEW_USER_REFERENCE_TEXT,),
+        )
+        await database.execute(
+            "UPDATE settings SET new_user_reference_button_text = ? WHERE new_user_reference_button_text IS NULL",
+            ("Conhecer o bot",),
+        )
+        await database.execute(
+            "UPDATE settings SET new_user_reference_button_color = ? WHERE new_user_reference_button_color IS NULL",
+            (REFERENCE_BUTTON_COLORS[0],),
         )
         await database.execute(
             """
@@ -467,11 +521,15 @@ async def setup_database() -> None:
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 result_text TEXT NOT NULL,
+                image_base64 TEXT,
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        delivery_columns = {row[1] for row in await (await database.execute("PRAGMA table_info(result_deliveries)")).fetchall()}
+        if "image_base64" not in delivery_columns:
+            await database.execute("ALTER TABLE result_deliveries ADD COLUMN image_base64 TEXT")
         await database.execute(
             """
             INSERT OR IGNORE INTO plans (id, name, category, duration_days, price, active)
@@ -521,6 +579,43 @@ async def register_user(message: Message) -> bool:
     if is_new:
         logger.info("Novo usuário registrado | id=%s | username=%s", user.id, user.username or "sem_username")
     return is_new
+
+
+async def get_new_user_reference_settings() -> tuple[str, str | None, str, str, str]:
+    async with aiosqlite.connect(DB_PATH) as database:
+        cursor = await database.execute(
+            """
+            SELECT new_user_reference_text, new_user_reference_photo_file_id,
+                   new_user_reference_button_text, new_user_reference_button_url,
+                   new_user_reference_button_color
+            FROM settings WHERE id = 1
+            """
+        )
+        row = await cursor.fetchone()
+    if not row:
+        return DEFAULT_NEW_USER_REFERENCE_TEXT, None, "Conhecer o bot", "", REFERENCE_BUTTON_COLORS[0]
+    return (
+        row[0] or DEFAULT_NEW_USER_REFERENCE_TEXT,
+        row[1],
+        row[2] or "Conhecer o bot",
+        row[3] or "",
+        row[4] if row[4] in REFERENCE_BUTTON_COLORS else REFERENCE_BUTTON_COLORS[0],
+    )
+
+
+async def save_new_user_reference_settings(
+    text: str, photo_file_id: str | None, button_text: str, button_url: str, button_color: str
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as database:
+        await database.execute(
+            """
+            UPDATE settings SET new_user_reference_text = ?, new_user_reference_photo_file_id = ?,
+                new_user_reference_button_text = ?, new_user_reference_button_url = ?,
+                new_user_reference_button_color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1
+            """,
+            (text, photo_file_id, button_text, button_url, button_color),
+        )
+        await database.commit()
 
 
 async def get_api_settings() -> tuple[str, str]:
@@ -726,6 +821,27 @@ def render_variables(template: str, user) -> str:
     )
 
 
+def render_new_user_reference(template: str, user) -> str:
+    now = datetime.now()
+    name = user.first_name or "Usuário"
+    surname = user.last_name or ""
+    values = {
+        "{ID}": str(user.id),
+        "{NAME}": html.escape(name),
+        "{SURNAME}": html.escape(surname),
+        "{NAMESURNAME}": html.escape(f"{name} {surname}".strip()),
+        "{LANG}": html.escape(user.language_code or "não informado"),
+        "{DATE}": now.strftime("%d/%m/%Y"),
+        "{TIME}": now.strftime("%H:%M"),
+        "{WEEKDAY}": now.strftime("%A"),
+        "{MENTION}": build_user_mention(user),
+        "{USERNAME}": html.escape(f"@{user.username}" if user.username else "sem username"),
+    }
+    for key, value in values.items():
+        template = template.replace(key, value)
+    return template
+
+
 def visible_length(text: str) -> int:
     return len(re.sub(r"<[^>]*>", "", text))
 
@@ -863,6 +979,28 @@ def sanitize_api_result(data: object) -> object:
     if isinstance(data, list):
         return [sanitize_api_result(item) for item in data]
     return data
+
+
+def extract_base64_photo(data: object) -> bytes | None:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key.lower() == "base64" and isinstance(value, str):
+                try:
+                    raw = value.split(",", 1)[1] if "," in value else value
+                    image = base64.b64decode(raw, validate=True)
+                    if image.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
+                        return image
+                except (ValueError, base64.binascii.Error):
+                    continue
+            found = extract_base64_photo(value)
+            if found:
+                return found
+    if isinstance(data, list):
+        for value in data:
+            found = extract_base64_photo(value)
+            if found:
+                return found
+    return None
 
 
 def parse_api_error_body(body: str) -> object:
@@ -1021,26 +1159,26 @@ def query_result_filename(value: str) -> str:
     return f"{safe_value[:80] or 'resultado'}.txt"
 
 
-async def create_result_delivery(user_id: int, result_text: str) -> str:
+async def create_result_delivery(user_id: int, result_text: str, image: bytes | None = None) -> str:
     token = uuid.uuid4().hex
     expires_at = (datetime.utcnow() + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
     plain_text = html_to_plain_text(result_text)
     async with aiosqlite.connect(DB_PATH) as database:
         await database.execute("DELETE FROM result_deliveries WHERE expires_at <= CURRENT_TIMESTAMP")
         await database.execute(
-            "INSERT INTO result_deliveries (token, user_id, result_text, expires_at) VALUES (?, ?, ?, ?)",
-            (token, user_id, plain_text, expires_at),
+            "INSERT INTO result_deliveries (token, user_id, result_text, image_base64, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (token, user_id, plain_text, base64.b64encode(image).decode("ascii") if image else None, expires_at),
         )
         await database.commit()
 
     return token
 
 
-async def get_private_result_delivery(token: str, user_id: int) -> str | None:
+async def get_private_result_delivery(token: str, user_id: int) -> tuple[str, bytes | None] | None:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
             """
-            SELECT result_text FROM result_deliveries
+            SELECT result_text, image_base64 FROM result_deliveries
             WHERE token = ? AND user_id = ? AND expires_at > CURRENT_TIMESTAMP
             """,
             (token, user_id),
@@ -1049,20 +1187,20 @@ async def get_private_result_delivery(token: str, user_id: int) -> str | None:
         if row:
             await database.execute("DELETE FROM result_deliveries WHERE token = ?", (token,))
             await database.commit()
-    return row[0] if row else None
+    return (row[0], base64.b64decode(row[1]) if row and row[1] else None) if row else None
 
 
-async def get_web_result_delivery(token: str) -> tuple[str, str] | None:
+async def get_web_result_delivery(token: str) -> tuple[str, str, str | None] | None:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
             """
-            SELECT result_text, expires_at FROM result_deliveries
+            SELECT result_text, expires_at, image_base64 FROM result_deliveries
             WHERE token = ? AND expires_at > CURRENT_TIMESTAMP
             """,
             (token,),
         )
         row = await cursor.fetchone()
-    return (row[0], row[1]) if row else None
+    return (row[0], row[1], row[2]) if row else None
 
 
 @web_app.get("/api/results/{token}")
@@ -1070,7 +1208,7 @@ async def web_result_api(token: str) -> dict:
     result = await get_web_result_delivery(token)
     if not result:
         raise HTTPException(status_code=404, detail="Resultado expirado ou indisponível.")
-    return {"result": result[0], "expires_at": result[1]}
+    return {"result": result[0], "expires_at": result[1], "image_base64": result[2]}
 
 
 @web_app.get("/r/{token}", response_class=HTMLResponse)
@@ -1079,10 +1217,10 @@ async def web_result_page(token: str) -> str:
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101b2a"><title>Resultado da consulta</title>
 <style>
-:root{--ink:#eaf2f8;--muted:#9fb1c3;--surface:#152437;--surface-2:#0d1826;--line:#294056;--accent:#42c987;--accent-dark:#113a2a;--danger:#ff9f9f}*{box-sizing:border-box}body{min-height:100dvh;margin:0;background:radial-gradient(circle at top left,#1c3c55 0,transparent 35%),linear-gradient(145deg,#09131f,#101e2d 55%,#0a1622);color:var(--ink);font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{width:min(100%,980px);margin:0 auto;padding:clamp(16px,4vw,48px) clamp(12px,3vw,28px)}.card{overflow:hidden;border:1px solid var(--line);border-radius:22px;background:rgba(21,36,55,.94);box-shadow:0 24px 70px #0008}.hero{display:flex;gap:16px;align-items:center;padding:clamp(18px,4vw,32px);border-bottom:1px solid var(--line);background:linear-gradient(110deg,#17344c,#13283b)}.mark{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:14px;background:var(--accent-dark);font-size:24px}.eyebrow{margin:0 0 4px;color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{margin:0;font-size:clamp(21px,4vw,30px);letter-spacing:-.03em}.content{padding:clamp(16px,3vw,28px)}.tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.status{margin:0;color:var(--muted);font-size:14px}.copy{border:1px solid #397b61;border-radius:10px;padding:10px 14px;background:var(--accent-dark);color:#dfffea;font-weight:750;cursor:pointer;transition:transform .15s,background .15s}.copy:hover{background:#19563d}.copy:active{transform:scale(.97)}.copy:disabled{opacity:.55;cursor:wait}.result{min-height:160px;margin:0;padding:clamp(14px,3vw,24px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:#dce9f4;font:clamp(12px,2.6vw,14px)/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.error{margin:0;color:var(--danger);font-weight:650}@media(max-width:520px){.shell{padding:12px}.card{border-radius:16px}.hero{padding:18px}.tools{align-items:stretch;flex-direction:column}.copy{width:100%}.result{border-radius:11px}}
-</style></head><body><div class="shell"><main class="card"><header class="hero"><div class="mark">✓</div><div><p class="eyebrow">Consulta privada</p><h1>Resultado da consulta</h1></div></header><section class="content"><div class="tools"><p class="status" id="status">Carregando resultado com segurança...</p><button class="copy" id="copy" type="button" disabled>⧉ Copiar retorno</button></div><pre class="result" id="result"></pre><p class="error" id="error"></p></section></main></div><script>
-const token=location.pathname.split('/').pop(),result=document.querySelector('#result'),status=document.querySelector('#status'),error=document.querySelector('#error'),copy=document.querySelector('#copy');
-fetch('/api/results/'+encodeURIComponent(token)).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.detail||'Resultado indisponível.');result.textContent=data.result;status.textContent='Disponível até '+data.expires_at;copy.disabled=false;}).catch(reason=>{status.textContent='';error.textContent=reason.message;});
+:root{--ink:#eaf2f8;--muted:#9fb1c3;--surface:#152437;--surface-2:#0d1826;--line:#294056;--accent:#42c987;--accent-dark:#113a2a;--danger:#ff9f9f}*{box-sizing:border-box}body{min-height:100dvh;margin:0;background:radial-gradient(circle at top left,#1c3c55 0,transparent 35%),linear-gradient(145deg,#09131f,#101e2d 55%,#0a1622);color:var(--ink);font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{width:min(100%,980px);margin:0 auto;padding:clamp(16px,4vw,48px) clamp(12px,3vw,28px)}.card{overflow:hidden;border:1px solid var(--line);border-radius:22px;background:rgba(21,36,55,.94);box-shadow:0 24px 70px #0008}.hero{display:flex;gap:16px;align-items:center;padding:clamp(18px,4vw,32px);border-bottom:1px solid var(--line);background:linear-gradient(110deg,#17344c,#13283b)}.mark{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:14px;background:var(--accent-dark);font-size:24px}.eyebrow{margin:0 0 4px;color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{margin:0;font-size:clamp(21px,4vw,30px);letter-spacing:-.03em}.content{padding:clamp(16px,3vw,28px)}.tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.status{margin:0;color:var(--muted);font-size:14px}.copy{border:1px solid #397b61;border-radius:10px;padding:10px 14px;background:var(--accent-dark);color:#dfffea;font-weight:750;cursor:pointer;transition:transform .15s,background .15s}.copy:hover{background:#19563d}.copy:active{transform:scale(.97)}.copy:disabled{opacity:.55;cursor:wait}.photo{display:block;width:min(100%,420px);max-height:560px;object-fit:contain;margin:0 auto 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}.result{min-height:160px;margin:0;padding:clamp(14px,3vw,24px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:#dce9f4;font:clamp(12px,2.6vw,14px)/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.error{margin:0;color:var(--danger);font-weight:650}@media(max-width:520px){.shell{padding:12px}.card{border-radius:16px}.hero{padding:18px}.tools{align-items:stretch;flex-direction:column}.copy{width:100%}.result{border-radius:11px}}
+</style></head><body><div class="shell"><main class="card"><header class="hero"><div class="mark">✓</div><div><p class="eyebrow">Consulta privada</p><h1>Resultado da consulta</h1></div></header><section class="content"><div class="tools"><p class="status" id="status">Carregando resultado com segurança...</p><button class="copy" id="copy" type="button" disabled>⧉ Copiar retorno</button></div><img class="photo" id="photo" hidden alt="Foto retornada pela consulta"><pre class="result" id="result"></pre><p class="error" id="error"></p></section></main></div><script>
+const token=location.pathname.split('/').pop(),result=document.querySelector('#result'),status=document.querySelector('#status'),error=document.querySelector('#error'),copy=document.querySelector('#copy'),photo=document.querySelector('#photo');
+fetch('/api/results/'+encodeURIComponent(token)).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.detail||'Resultado indisponível.');result.textContent=data.result;if(data.image_base64){photo.src='data:image/jpeg;base64,'+data.image_base64;photo.hidden=false;}status.textContent='Disponível até '+data.expires_at;copy.disabled=false;}).catch(reason=>{status.textContent='';error.textContent=reason.message;});
 copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(result.textContent);copy.textContent='✓ Retorno copiado';setTimeout(()=>copy.textContent='⧉ Copiar retorno',1800);}catch{error.textContent='Não foi possível copiar automaticamente. Selecione o texto para copiar.';}});
 </script></body></html>"""
 
@@ -1486,6 +1624,44 @@ async def send_payment_notifications(bot: Bot, reference_text: str | None, log_t
             logger.exception("Falha ao enviar para canal de logs %s", logs_channel)
 
 
+async def send_error_log(bot: Bot, message: Message, command: str, status_code: int, error: object) -> None:
+    _, _, _, _, logs_channel = await get_misticpay_settings()
+    if not (logs_channel or "").strip():
+        return
+    text = (
+        "<b>⚠️ Erro de consulta</b>\n\n"
+        f"° <b>Comando:</b> <code>/{html.escape(command)}</code>\n"
+        f"° <b>Status:</b> <code>{status_code}</code>\n"
+        f"° <b>Usuário:</b> {build_user_mention(message.from_user)}\n"
+        f"° <b>Chat:</b> <code>{message.chat.id}</code>\n"
+        f"° <b>Detalhe:</b> <code>{html.escape(str(error))[:700]}</code>"
+    )
+    try:
+        await bot.send_message(logs_channel, text, parse_mode=ParseMode.HTML)
+    except Exception:
+        logger.exception("Falha ao enviar erro para canal de logs %s", logs_channel)
+
+
+async def notify_new_user_reference(bot: Bot, user) -> None:
+    _, _, _, reference_channel, _ = await get_misticpay_settings()
+    if not (reference_channel or "").strip():
+        return
+    text, photo_file_id, button_text, button_url, button_color = await get_new_user_reference_settings()
+    keyboard = None
+    if button_url:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"{button_color} {button_text}", url=button_url)
+        ]])
+    try:
+        rendered = render_new_user_reference(text, user)
+        if photo_file_id:
+            await bot.send_photo(reference_channel, photo_file_id, caption=rendered, reply_markup=keyboard)
+        else:
+            await bot.send_message(reference_channel, rendered, reply_markup=keyboard)
+    except Exception:
+        logger.exception("Falha ao anunciar novo usuário no canal de referência %s", reference_channel)
+
+
 async def get_pending_transactions() -> list[tuple[str, int, float, str, str, str, str, int | None, str | None, int | None]]:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
@@ -1591,7 +1767,13 @@ def build_chassi_url(api_base_url: str, api_key: str, chassi: str) -> str:
     return f"{base}api/consulta/chassi/v1?{query}"
 
 
-async def fetch_api_data(api_base_url: str, api_key: str, spec: dict, value: str) -> object:
+async def fetch_api_data(
+    api_base_url: str,
+    api_key: str,
+    spec: dict,
+    value: str,
+    timeout: int = 60,
+) -> object:
     url = build_api_command_url(api_base_url, api_key, spec, value)
     logger.info(
         "Enviando consulta | comando=/%s | parametro=%s | valor=%r | url=%s",
@@ -1603,7 +1785,7 @@ async def fetch_api_data(api_base_url: str, api_key: str, spec: dict, value: str
 
     def _request() -> object:
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
         try:
             return json.loads(body)
@@ -1611,6 +1793,59 @@ async def fetch_api_data(api_base_url: str, api_key: str, spec: dict, value: str
             return body
 
     return await asyncio.to_thread(_request)
+
+
+def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict]:
+    aliases = FALLBACK_COMMAND_GROUPS.get(command_name, ())
+    candidates = [API_COMMAND_LOOKUP[alias] for alias in aliases if alias in API_COMMAND_LOOKUP]
+    ordered = [primary_spec, *[candidate for candidate in candidates if candidate is not primary_spec]]
+    unique_paths: set[str] = set()
+    return [
+        candidate
+        for candidate in ordered
+        if not (candidate["path"] in unique_paths or unique_paths.add(candidate["path"]))
+    ]
+
+
+async def fetch_api_data_with_fallback(
+    api_base_url: str,
+    api_key: str,
+    command_name: str,
+    primary_spec: dict,
+    value: str,
+    status_message: Message,
+) -> object:
+    candidates = fallback_specs_for(command_name, primary_spec)
+    last_error: Exception | None = None
+
+    for index, candidate in enumerate(candidates):
+        try:
+            return await fetch_api_data(
+                api_base_url,
+                api_key,
+                candidate,
+                value,
+                timeout=FALLBACK_TIMEOUT_SECONDS if index < len(candidates) - 1 else 60,
+            )
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+            if index == len(candidates) - 1:
+                break
+            logger.warning(
+                "Base lenta ou indisponível | comando=/%s | tentativa=/%s | próximo=/%s | erro=%s",
+                command_name,
+                candidate["aliases"][0],
+                candidates[index + 1]["aliases"][0],
+                error,
+            )
+            try:
+                await status_message.edit_text("⏳ A consulta está demorando. Tentando outra base automaticamente...")
+            except TelegramBadRequest:
+                pass
+
+    if last_error:
+        raise last_error
+    raise TimeoutError("Nenhuma base de consulta disponível.")
 
 
 async def fetch_chassi_data(api_base_url: str, api_key: str, chassi: str) -> object:
@@ -1735,6 +1970,7 @@ def misticpay_admin_keyboard(force_join_enabled: bool = False) -> InlineKeyboard
                 callback_data="admin:force_join_toggle",
             )],
             [InlineKeyboardButton(text="📜 Canal de logs", callback_data="admin:mp_logs_channel")],
+            [InlineKeyboardButton(text="👤 Aviso de novo usuário", callback_data="admin:new_user_reference")],
             [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
         ]
     )
@@ -1845,6 +2081,10 @@ class AdminState(StatesGroup):
     waiting_plan_grant = State()
     waiting_plan_duration = State()
     waiting_plan_price = State()
+    waiting_new_user_reference_text = State()
+    waiting_new_user_reference_photo = State()
+    waiting_new_user_reference_button_text = State()
+    waiting_new_user_reference_button_url = State()
 
 
 def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
@@ -2015,23 +2255,33 @@ async def send_start(bot: Bot, chat_id: int, user) -> None:
 
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
-    await register_user(message)
+    is_new_user = await register_user(message)
+    if is_new_user:
+        await notify_new_user_reference(message.bot, message.from_user)
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) == 2 and parts[1].startswith("result_"):
-        result_text = await get_private_result_delivery(parts[1][7:], message.from_user.id)
-        if not result_text:
+        delivery = await get_private_result_delivery(parts[1][7:], message.from_user.id)
+        if not delivery:
             await message.answer("⏳ Este resultado expirou ou não pertence a você. Faça uma nova consulta.")
             return
+        result_text, photo = delivery
+        private_keyboard = private_result_keyboard(message.from_user.id, message.message_id)
+        if photo:
+            await message.answer_photo(
+                BufferedInputFile(photo, filename="foto-consulta.jpg"),
+                caption="📷 Foto encontrada na consulta.",
+                reply_markup=private_keyboard,
+            )
         if len(result_text) <= 3900:
             await message.answer(
                 f"<pre>{html.escape(result_text)}</pre>",
-                reply_markup=private_result_keyboard(message.from_user.id, message.message_id),
+                reply_markup=private_keyboard,
             )
         else:
             await message.answer_document(
                 BufferedInputFile(result_text.encode("utf-8"), filename="resultado-privado.txt"),
                 caption="📄 Seu resultado foi enviado em arquivo.",
-                reply_markup=private_result_keyboard(message.from_user.id, message.message_id),
+                reply_markup=private_keyboard,
             )
         return
     await send_start(message.bot, message.chat.id, message.from_user)
@@ -2794,6 +3044,137 @@ async def receive_mp_logs_channel_handler(message: Message, state: FSMContext) -
     await message.answer("✅ Canal de logs salvo.", reply_markup=misticpay_admin_keyboard())
 
 
+def new_user_reference_keyboard(photo_configured: bool, button_color: str) -> InlineKeyboardMarkup:
+    photo_label = "🗑 Remover imagem" if photo_configured else "🖼 Definir imagem"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Alterar texto", callback_data="admin:new_user_ref_text")],
+        [InlineKeyboardButton(text=photo_label, callback_data="admin:new_user_ref_photo")],
+        [InlineKeyboardButton(text="🔘 Texto do botão", callback_data="admin:new_user_ref_button_text")],
+        [InlineKeyboardButton(text="🔗 Link do botão", callback_data="admin:new_user_ref_button_url")],
+        [InlineKeyboardButton(text=f"{button_color} Cor do botão", callback_data="admin:new_user_ref_button_color")],
+        [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:misticpay")],
+    ])
+
+
+@router.callback_query(F.data == "admin:new_user_reference")
+async def new_user_reference_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    await state.clear()
+    text, photo, button_text, button_url, button_color = await get_new_user_reference_settings()
+    await query.message.edit_text(
+        "<b>👤 Aviso de novo usuário</b>\n\n"
+        "Este aviso é enviado ao canal de referência quando alguém usa <code>/start</code> pela primeira vez.\n\n"
+        f"Imagem: <code>{'configurada' if photo else 'não configurada'}</code>\n"
+        f"Botão: <code>{html.escape(button_text)}</code>\n"
+        f"Link: <code>{html.escape(button_url or 'não configurado')}</code>\n"
+        f"Cor visual: <code>{button_color}</code>\n\n"
+        "Tags: <code>{ID}</code>, <code>{NAME}</code>, <code>{SURNAME}</code>, <code>{NAMESURNAME}</code>, "
+        "<code>{LANG}</code>, <code>{DATE}</code>, <code>{TIME}</code>, <code>{WEEKDAY}</code>, "
+        "<code>{MENTION}</code>, <code>{USERNAME}</code>.",
+        reply_markup=new_user_reference_keyboard(bool(photo), button_color),
+    )
+    await query.answer()
+
+
+@router.callback_query(F.data == "admin:new_user_ref_text")
+async def new_user_reference_text_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    await state.set_state(AdminState.waiting_new_user_reference_text)
+    await query.message.answer("Envie o texto HTML do aviso. Use as tags exibidas no menu.", reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.message(AdminState.waiting_new_user_reference_text, F.text)
+async def receive_new_user_reference_text(message: Message, state: FSMContext) -> None:
+    text = message.text.strip()
+    _, photo, button_text, button_url, button_color = await get_new_user_reference_settings()
+    limit = 1024 if photo else 4096
+    if not text or visible_length(text) > limit:
+        return await message.answer(f"❌ Informe um texto de até {limit} caracteres.", reply_markup=cancel_keyboard())
+    await save_new_user_reference_settings(text, photo, button_text, button_url, button_color)
+    await state.clear()
+    await message.answer("✅ Texto do aviso salvo.", reply_markup=new_user_reference_keyboard(bool(photo), button_color))
+
+
+@router.callback_query(F.data == "admin:new_user_ref_photo")
+async def new_user_reference_photo_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    _, photo, button_text, button_url, button_color = await get_new_user_reference_settings()
+    if photo:
+        text, _, _, _, _ = await get_new_user_reference_settings()
+        await save_new_user_reference_settings(text, None, button_text, button_url, button_color)
+        return await query.answer("Imagem removida.", show_alert=True)
+    await state.set_state(AdminState.waiting_new_user_reference_photo)
+    await query.message.answer("Envie a imagem do aviso de novo usuário.", reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.message(AdminState.waiting_new_user_reference_photo, F.photo)
+async def receive_new_user_reference_photo(message: Message, state: FSMContext) -> None:
+    text, _, button_text, button_url, button_color = await get_new_user_reference_settings()
+    if visible_length(text) > 1024:
+        return await message.answer("❌ O texto atual excede 1024 caracteres e não cabe com imagem.", reply_markup=cancel_keyboard())
+    await save_new_user_reference_settings(text, message.photo[-1].file_id, button_text, button_url, button_color)
+    await state.clear()
+    await message.answer("✅ Imagem do aviso salva.", reply_markup=new_user_reference_keyboard(True, button_color))
+
+
+@router.callback_query(F.data == "admin:new_user_ref_button_text")
+async def new_user_reference_button_text_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    await state.set_state(AdminState.waiting_new_user_reference_button_text)
+    await query.message.answer("Envie o texto do botão, de 1 a 64 caracteres.", reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.message(AdminState.waiting_new_user_reference_button_text, F.text)
+async def receive_new_user_reference_button_text(message: Message, state: FSMContext) -> None:
+    value = message.text.strip()
+    if not 1 <= len(value) <= 64:
+        return await message.answer("❌ Use entre 1 e 64 caracteres.", reply_markup=cancel_keyboard())
+    text, photo, _, button_url, button_color = await get_new_user_reference_settings()
+    await save_new_user_reference_settings(text, photo, value, button_url, button_color)
+    await state.clear()
+    await message.answer("✅ Texto do botão salvo.", reply_markup=new_user_reference_keyboard(bool(photo), button_color))
+
+
+@router.callback_query(F.data == "admin:new_user_ref_button_url")
+async def new_user_reference_button_url_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    await state.set_state(AdminState.waiting_new_user_reference_button_url)
+    await query.message.answer("Envie o link do botão com https:// ou tg://. Envie <code>remover</code> para ocultar o botão.", reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.message(AdminState.waiting_new_user_reference_button_url, F.text)
+async def receive_new_user_reference_button_url(message: Message, state: FSMContext) -> None:
+    value = message.text.strip()
+    if value.lower() == "remover":
+        value = ""
+    elif not re.match(r"^(https://|tg://)", value, re.IGNORECASE):
+        return await message.answer("❌ O link deve começar com https:// ou tg://.", reply_markup=cancel_keyboard())
+    text, photo, button_text, _, button_color = await get_new_user_reference_settings()
+    await save_new_user_reference_settings(text, photo, button_text, value, button_color)
+    await state.clear()
+    await message.answer("✅ Link do botão salvo.", reply_markup=new_user_reference_keyboard(bool(photo), button_color))
+
+
+@router.callback_query(F.data == "admin:new_user_ref_button_color")
+async def new_user_reference_button_color_handler(query: CallbackQuery) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    text, photo, button_text, button_url, current = await get_new_user_reference_settings()
+    color = REFERENCE_BUTTON_COLORS[(REFERENCE_BUTTON_COLORS.index(current) + 1) % len(REFERENCE_BUTTON_COLORS)]
+    await save_new_user_reference_settings(text, photo, button_text, button_url, color)
+    await query.message.edit_reply_markup(reply_markup=new_user_reference_keyboard(bool(photo), color))
+    await query.answer("Cor visual alterada.")
+
+
 @router.callback_query(F.data == "admin:text")
 async def edit_text_handler(query: CallbackQuery, state: FSMContext) -> None:
     if not is_admin(query.from_user.id):
@@ -2986,13 +3367,16 @@ async def dynamic_api_command_handler(message: Message) -> None:
     status_message = await message.answer("⏳ Processando sua consulta...")
     schedule_query_cleanup(message, status_message)
     try:
-        data = await fetch_api_data(api_base_url, api_key, spec, value)
+        data = await fetch_api_data_with_fallback(
+            api_base_url, api_key, command_name, spec, value, status_message
+        )
     except urllib.error.HTTPError as error:
         detail = await asyncio.to_thread(error.read) if error.fp else b""
         body = detail.decode("utf-8", errors="replace") if detail else error.reason
         bot_me = await message.bot.get_me()
         parsed_body = parse_api_error_body(body)
         if error.code == 404:
+            await send_error_log(message.bot, message, command_name, error.code, parsed_body)
             await status_message.edit_text(
                 render_not_found_result(
                     spec["title"],
@@ -3003,12 +3387,14 @@ async def dynamic_api_command_handler(message: Message) -> None:
                 reply_markup=result_keyboard(message.from_user.id, message.message_id),
             )
             return
+        await send_error_log(message.bot, message, command_name, error.code, parsed_body)
         await status_message.edit_text(
             render_api_failure(spec["title"], error.code, message.from_user, bot_me.username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        await send_error_log(message.bot, message, command_name, 503, error)
         await status_message.edit_text(
             render_api_failure(spec["title"], 503, message.from_user, (await message.bot.get_me()).username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
@@ -3017,7 +3403,9 @@ async def dynamic_api_command_handler(message: Message) -> None:
 
     bot_me = await message.bot.get_me()
     result_text = render_api_result(spec["title"], data, message.from_user, bot_me.username or "")
-    result_token = await create_result_delivery(message.from_user.id, result_text)
+    result_token = await create_result_delivery(
+        message.from_user.id, result_text, extract_base64_photo(data)
+    )
     result_message = await send_query_result(
         status_message,
         result_text,
@@ -3061,6 +3449,7 @@ async def chassi_handler(message: Message) -> None:
         bot_me = await message.bot.get_me()
         parsed_body = parse_api_error_body(body)
         if error.code == 404:
+            await send_error_log(message.bot, message, "chassi", error.code, parsed_body)
             await status_message.edit_text(
                 render_not_found_result(
                     "Resultado do chassi",
@@ -3071,12 +3460,14 @@ async def chassi_handler(message: Message) -> None:
                 reply_markup=result_keyboard(message.from_user.id, message.message_id),
             )
             return
+        await send_error_log(message.bot, message, "chassi", error.code, parsed_body)
         await status_message.edit_text(
             render_api_failure("Resultado do chassi", error.code, message.from_user, bot_me.username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        await send_error_log(message.bot, message, "chassi", 503, error)
         await status_message.edit_text(
             render_api_failure("Resultado do chassi", 503, message.from_user, (await message.bot.get_me()).username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
@@ -3085,7 +3476,9 @@ async def chassi_handler(message: Message) -> None:
 
     bot_me = await message.bot.get_me()
     result_text = render_api_result("Resultado do chassi", data, message.from_user, bot_me.username or "")
-    result_token = await create_result_delivery(message.from_user.id, result_text)
+    result_token = await create_result_delivery(
+        message.from_user.id, result_text, extract_base64_photo(data)
+    )
     result_message = await send_query_result(
         status_message,
         result_text,
