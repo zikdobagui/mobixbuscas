@@ -20,6 +20,4 @@ O projeto já inclui `discloud.config` para bot Python. Configure as variáveis 
 
 ## Retorno web
 
-A pasta `webapp` é um segundo projeto Discloud, do tipo `site`, para o domínio `mobixretornoconsulta.discloud.app`. Faça o deploy dessa pasta separadamente e configure nela `RESULTS_API_SECRET` com o mesmo valor usado pelo bot.
-
-No bot, defina `WEB_RESULTS_URL` e `RESULTS_API_SECRET`. Sem a chave compartilhada, apenas os botões de retorno privado e deletar serão exibidos. O link web é temporário e expira em 10 minutos.
+O projeto principal é um `site` na Discloud e inicia o bot e a página de resultados juntos. Registre o subdomínio `mobixretornoconsulta` no painel da Discloud e faça deploy da raiz do repositório. O link web é temporário e expira em 10 minutos.

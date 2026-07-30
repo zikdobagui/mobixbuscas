@@ -27,6 +27,8 @@ from aiogram.types import (
     Message,
 )
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 
 # -----------------------------------------------------------------------------
@@ -36,12 +38,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+web_app = FastAPI()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS_TEXT = os.getenv("ADMIN_IDS", "").strip()
 DB_PATH = os.getenv("DB_PATH", "bot.db").strip()
 WEB_RESULTS_URL = os.getenv("WEB_RESULTS_URL", "https://mobixretornoconsulta.discloud.app").strip().rstrip("/")
-RESULTS_API_SECRET = os.getenv("RESULTS_API_SECRET", "").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("Defina BOT_TOKEN no arquivo .env")
@@ -1009,33 +1011,7 @@ async def create_result_delivery(user_id: int, result_text: str) -> str:
         )
         await database.commit()
 
-    if RESULTS_API_SECRET and WEB_RESULTS_URL:
-        asyncio.create_task(push_result_to_web(token, user_id, plain_text, expires_at))
     return token
-
-
-async def push_result_to_web(token: str, user_id: int, result_text: str, expires_at: str) -> None:
-    payload = json.dumps({
-        "token": token,
-        "user_id": user_id,
-        "result_text": result_text,
-        "expires_at": expires_at,
-    }).encode("utf-8")
-
-    def _push() -> None:
-        request = urllib.request.Request(
-            f"{WEB_RESULTS_URL}/api/results",
-            data=payload,
-            headers={"Content-Type": "application/json", "X-Results-Secret": RESULTS_API_SECRET},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=15):
-            pass
-
-    try:
-        await asyncio.to_thread(_push)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-        logger.exception("Falha ao enviar resultado temporário para o Mini App")
 
 
 async def get_private_result_delivery(token: str, user_id: int) -> str | None:
@@ -1054,6 +1030,37 @@ async def get_private_result_delivery(token: str, user_id: int) -> str | None:
     return row[0] if row else None
 
 
+async def get_web_result_delivery(token: str) -> tuple[str, str] | None:
+    async with aiosqlite.connect(DB_PATH) as database:
+        cursor = await database.execute(
+            """
+            SELECT result_text, expires_at FROM result_deliveries
+            WHERE token = ? AND expires_at > CURRENT_TIMESTAMP
+            """,
+            (token,),
+        )
+        row = await cursor.fetchone()
+    return (row[0], row[1]) if row else None
+
+
+@web_app.get("/api/results/{token}")
+async def web_result_api(token: str) -> dict:
+    result = await get_web_result_delivery(token)
+    if not result:
+        raise HTTPException(status_code=404, detail="Resultado expirado ou indisponível.")
+    return {"result": result[0], "expires_at": result[1]}
+
+
+@web_app.get("/r/{token}", response_class=HTMLResponse)
+async def web_result_page(token: str) -> str:
+    return """<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resultado da consulta</title><style>body{margin:0;background:#0d1824;color:#e8eef5;font:16px system-ui;padding:24px}main{max-width:760px;margin:auto;background:#162638;padding:24px;border-radius:16px}pre{white-space:pre-wrap;word-break:break-word;font:14px ui-monospace,monospace;color:#d7e4ef}#error{color:#ff9d9d}</style>
+</head><body><main><h2>Resultado da consulta</h2><p id="status">Carregando...</p><pre id="result"></pre><p id="error"></p></main><script>
+const token=location.pathname.split('/').pop();fetch('/api/results/'+encodeURIComponent(token)).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail||'Resultado indisponível.');document.querySelector('#status').textContent='Disponível até '+d.expires_at;document.querySelector('#result').textContent=d.result;}).catch(e=>{document.querySelector('#status').textContent='';document.querySelector('#error').textContent=e.message;});
+</script></body></html>"""
+
+
 async def send_query_result(
     status_message: Message,
     text: str,
@@ -1066,7 +1073,9 @@ async def send_query_result(
     if delivery_only:
         await status_message.edit_text(
             "<b>✅ Consulta concluída</b>\n\n"
-            "Use um dos botões abaixo para ver seu resultado com privacidade.",
+            "Use um dos botões abaixo para ver seu resultado com privacidade.\n\n"
+            f"<b>Consulta enviada para:</b> {build_user_mention(user)}\n"
+            f"<b>Creditos:</b> @{html.escape(bot_username or 'bot')}",
             reply_markup=reply_markup,
         )
         return status_message
@@ -1633,7 +1642,7 @@ def result_keyboard(user_id: int, command_message_id: int, token: str | None = N
     rows: list[list[InlineKeyboardButton]] = []
     if token:
         delivery_buttons = []
-        if WEB_RESULTS_URL and RESULTS_API_SECRET:
+        if WEB_RESULTS_URL:
             delivery_buttons.append(InlineKeyboardButton(
                 text="🌐 Ver resultado web",
                 url=f"{WEB_RESULTS_URL}/r/{token}",
@@ -2855,7 +2864,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
         query_result_filename(value),
         message.from_user,
         bot_me.username or "",
-        delivery_only=bool(RESULTS_API_SECRET and WEB_RESULTS_URL),
+        delivery_only=bool(WEB_RESULTS_URL),
     )
     schedule_query_cleanup(message, result_message)
 
@@ -2921,7 +2930,7 @@ async def chassi_handler(message: Message) -> None:
         query_result_filename(chassi),
         message.from_user,
         bot_me.username or "",
-        delivery_only=bool(RESULTS_API_SECRET and WEB_RESULTS_URL),
+        delivery_only=bool(WEB_RESULTS_URL),
     )
     schedule_query_cleanup(message, result_message)
 
@@ -3241,7 +3250,7 @@ async def button_layout_handler(query: CallbackQuery) -> None:
 # Inicialização
 # -----------------------------------------------------------------------------
 
-async def main() -> None:
+async def run_bot() -> None:
     await setup_database()
 
     bot = Bot(
@@ -3267,12 +3276,27 @@ async def main() -> None:
         await bot.session.close()
 
 
+@web_app.on_event("startup")
+async def start_bot_with_web_server() -> None:
+    web_app.state.bot_task = asyncio.create_task(run_bot())
+
+
+@web_app.on_event("shutdown")
+async def stop_bot_with_web_server() -> None:
+    task = getattr(web_app.state, "bot_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 if __name__ == "__main__":
+    import uvicorn
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    uvicorn.run("main:web_app", host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
