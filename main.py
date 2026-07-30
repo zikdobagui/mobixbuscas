@@ -1003,6 +1003,14 @@ def extract_base64_photo(data: object) -> bytes | None:
     return None
 
 
+def is_html_error_response(data: object) -> bool:
+    """Evita exibir páginas 404/erro da API como se fossem resultados."""
+    if not isinstance(data, str):
+        return False
+    normalized = data.lstrip().lower()
+    return normalized.startswith("<!doctype html") or normalized.startswith("<html")
+
+
 def parse_api_error_body(body: str) -> object:
     try:
         return json.loads(body)
@@ -1217,7 +1225,7 @@ async def web_result_page(token: str) -> str:
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101b2a"><title>Resultado da consulta</title>
 <style>
-:root{--ink:#eaf2f8;--muted:#9fb1c3;--surface:#152437;--surface-2:#0d1826;--line:#294056;--accent:#42c987;--accent-dark:#113a2a;--danger:#ff9f9f}*{box-sizing:border-box}body{min-height:100dvh;margin:0;background:radial-gradient(circle at top left,#1c3c55 0,transparent 35%),linear-gradient(145deg,#09131f,#101e2d 55%,#0a1622);color:var(--ink);font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{width:min(100%,980px);margin:0 auto;padding:clamp(16px,4vw,48px) clamp(12px,3vw,28px)}.card{overflow:hidden;border:1px solid var(--line);border-radius:22px;background:rgba(21,36,55,.94);box-shadow:0 24px 70px #0008}.hero{display:flex;gap:16px;align-items:center;padding:clamp(18px,4vw,32px);border-bottom:1px solid var(--line);background:linear-gradient(110deg,#17344c,#13283b)}.mark{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:14px;background:var(--accent-dark);font-size:24px}.eyebrow{margin:0 0 4px;color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{margin:0;font-size:clamp(21px,4vw,30px);letter-spacing:-.03em}.content{padding:clamp(16px,3vw,28px)}.tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.status{margin:0;color:var(--muted);font-size:14px}.copy{border:1px solid #397b61;border-radius:10px;padding:10px 14px;background:var(--accent-dark);color:#dfffea;font-weight:750;cursor:pointer;transition:transform .15s,background .15s}.copy:hover{background:#19563d}.copy:active{transform:scale(.97)}.copy:disabled{opacity:.55;cursor:wait}.photo{display:block;width:min(100%,420px);max-height:560px;object-fit:contain;margin:0 auto 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}.result{min-height:160px;margin:0;padding:clamp(14px,3vw,24px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:#dce9f4;font:clamp(12px,2.6vw,14px)/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.error{margin:0;color:var(--danger);font-weight:650}@media(max-width:520px){.shell{padding:12px}.card{border-radius:16px}.hero{padding:18px}.tools{align-items:stretch;flex-direction:column}.copy{width:100%}.result{border-radius:11px}}
+:root{--ink:#eaf2f8;--muted:#9fb1c3;--surface:#152437;--surface-2:#0d1826;--line:#294056;--accent:#42c987;--accent-dark:#113a2a;--danger:#ff9f9f}*{box-sizing:border-box}body{min-height:100dvh;margin:0;background:radial-gradient(circle at top left,#1c3c55 0,transparent 35%),linear-gradient(145deg,#09131f,#101e2d 55%,#0a1622);color:var(--ink);font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{width:min(100%,980px);margin:0 auto;padding:clamp(16px,4vw,48px) clamp(12px,3vw,28px)}.card{overflow:hidden;border:1px solid var(--line);border-radius:22px;background:rgba(21,36,55,.94);box-shadow:0 24px 70px #0008}.hero{display:flex;gap:16px;align-items:center;padding:clamp(18px,4vw,32px);border-bottom:1px solid var(--line);background:linear-gradient(110deg,#17344c,#13283b)}.mark{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:14px;background:var(--accent-dark);font-size:24px}.eyebrow{margin:0 0 4px;color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.hero h1{margin:0;font-size:clamp(21px,4vw,30px);letter-spacing:-.03em}.content{padding:clamp(16px,3vw,28px)}.tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.status{margin:0;color:var(--muted);font-size:14px}.copy{border:1px solid #397b61;border-radius:10px;padding:10px 14px;background:var(--accent-dark);color:#dfffea;font-weight:750;cursor:pointer;transition:transform .15s,background .15s}.copy:hover{background:#19563d}.copy:active{transform:scale(.97)}.copy:disabled{opacity:.55;cursor:wait}.photo{display:block;width:min(100%,420px);max-height:560px;object-fit:contain;margin:0 auto 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}.photo[hidden]{display:none}.result{min-height:160px;margin:0;padding:clamp(14px,3vw,24px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:#dce9f4;font:clamp(12px,2.6vw,14px)/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.error{margin:0;color:var(--danger);font-weight:650}@media(max-width:520px){.shell{padding:12px}.card{border-radius:16px}.hero{padding:18px}.tools{align-items:stretch;flex-direction:column}.copy{width:100%}.result{border-radius:11px}}
 </style></head><body><div class="shell"><main class="card"><header class="hero"><div class="mark">✓</div><div><p class="eyebrow">Consulta privada</p><h1>Resultado da consulta</h1></div></header><section class="content"><div class="tools"><p class="status" id="status">Carregando resultado com segurança...</p><button class="copy" id="copy" type="button" disabled>⧉ Copiar retorno</button></div><img class="photo" id="photo" hidden alt="Foto retornada pela consulta"><pre class="result" id="result"></pre><p class="error" id="error"></p></section></main></div><script>
 const token=location.pathname.split('/').pop(),result=document.querySelector('#result'),status=document.querySelector('#status'),error=document.querySelector('#error'),copy=document.querySelector('#copy'),photo=document.querySelector('#photo');
 fetch('/api/results/'+encodeURIComponent(token)).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.detail||'Resultado indisponível.');result.textContent=data.result;if(data.image_base64){photo.src='data:image/jpeg;base64,'+data.image_base64;photo.hidden=false;}status.textContent='Disponível até '+data.expires_at;copy.disabled=false;}).catch(reason=>{status.textContent='';error.textContent=reason.message;});
@@ -1405,9 +1413,12 @@ async def request_misticpay_json(
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8", errors="replace")
         try:
-            return json.loads(body)
+            data = json.loads(body)
         except json.JSONDecodeError:
-            return body
+            data = body
+        if is_html_error_response(data):
+            raise ValueError("A base retornou uma página HTML de erro.")
+        return data
 
     return await asyncio.to_thread(_request)
 
@@ -1788,9 +1799,12 @@ async def fetch_api_data(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
         try:
-            return json.loads(body)
+            data = json.loads(body)
         except json.JSONDecodeError:
-            return body
+            data = body
+        if is_html_error_response(data):
+            raise ValueError("A base retornou uma página HTML de erro.")
+        return data
 
     return await asyncio.to_thread(_request)
 
@@ -1856,9 +1870,12 @@ async def fetch_chassi_data(api_base_url: str, api_key: str, chassi: str) -> obj
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8", errors="replace")
         try:
-            return json.loads(body)
+            data = json.loads(body)
         except json.JSONDecodeError:
-            return body
+            data = body
+        if is_html_error_response(data):
+            raise ValueError("A base retornou uma página HTML de erro.")
+        return data
 
     return await asyncio.to_thread(_request)
 
