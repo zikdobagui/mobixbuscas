@@ -988,6 +988,28 @@ def render_not_found_result(title: str, data: object, user, bot_username: str) -
     )
 
 
+def render_api_failure(title: str, status_code: int, user, bot_username: str) -> str:
+    messages = {
+        401: "A base não autorizou esta consulta. Tente novamente mais tarde.",
+        403: "Esta consulta não está disponível no momento.",
+        429: "Muitas consultas foram enviadas. Aguarde alguns instantes e tente novamente.",
+        500: "A base apresentou instabilidade. Tente novamente em alguns minutos.",
+        502: "A base está temporariamente indisponível. Tente novamente mais tarde.",
+        503: "A base está em manutenção. Use outra base ou tente novamente mais tarde.",
+        504: "A base demorou para responder. Tente novamente em alguns instantes.",
+    }
+    footer = (
+        f"\n\n<b>Consulta enviada para:</b> {build_user_mention(user)}\n"
+        f"<b>Creditos:</b> @{html.escape(bot_username or 'bot')}"
+    )
+    return (
+        f"<b>{html.escape(title)}</b>\n\n"
+        "° <b>Resultado:</b> <code>Consulta indisponível</code>\n"
+        f"° <b>Mensagem:</b> <code>{html.escape(messages.get(status_code, 'Não foi possível concluir a consulta agora. Tente novamente mais tarde.'))}</code>"
+        f"{footer}"
+    )
+
+
 def html_to_plain_text(text: str) -> str:
     text = re.sub(r'<a\s+href="[^"]*">(.*?)</a>', r"\1", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"<[^>]+>", "", text)
@@ -2862,12 +2884,14 @@ async def dynamic_api_command_handler(message: Message) -> None:
             )
             return
         await status_message.edit_text(
-            f"❌ Erro na consulta ({error.code}):\n<code>{html.escape(str(body))}</code>"
+            render_api_failure(spec["title"], error.code, message.from_user, bot_me.username or ""),
+            reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         await status_message.edit_text(
-            f"❌ Não foi possível consultar a API:\n<code>{html.escape(str(error))}</code>"
+            render_api_failure(spec["title"], 503, message.from_user, (await message.bot.get_me()).username or ""),
+            reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
 
@@ -2928,12 +2952,14 @@ async def chassi_handler(message: Message) -> None:
             )
             return
         await status_message.edit_text(
-            f"❌ Erro na consulta ({error.code}):\n<code>{html.escape(str(body))}</code>"
+            render_api_failure("Resultado do chassi", error.code, message.from_user, bot_me.username or ""),
+            reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         await status_message.edit_text(
-            f"❌ Não foi possível consultar a API:\n<code>{html.escape(str(error))}</code>"
+            render_api_failure("Resultado do chassi", 503, message.from_user, (await message.bot.get_me()).username or ""),
+            reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
         return
 
