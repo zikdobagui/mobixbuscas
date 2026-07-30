@@ -1364,6 +1364,15 @@ async def set_plan_active(plan_id: int, active: bool) -> None:
         await database.commit()
 
 
+async def update_plan_details(plan_id: int, duration_days: int, price: float) -> None:
+    async with aiosqlite.connect(DB_PATH) as database:
+        await database.execute(
+            "UPDATE plans SET duration_days = ?, price = ? WHERE id = ?",
+            (duration_days, price, plan_id),
+        )
+        await database.commit()
+
+
 async def delete_plan(plan_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as database:
         await database.execute("DELETE FROM subscriptions WHERE plan_id = ?", (plan_id,))
@@ -1757,6 +1766,7 @@ def plans_admin_keyboard(plans: list[tuple[int, str, str, int, float, int]]) -> 
 
 def plan_editor_keyboard(plan: tuple[int, str, str, int, float, int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Alterar tempo e valor", callback_data=f"admin:plan_edit:{plan[0]}")],
         [InlineKeyboardButton(
             text="🔴 Desativar" if plan[5] else "🟢 Ativar",
             callback_data=f"admin:plan_toggle:{plan[0]}",
@@ -1824,6 +1834,7 @@ class AdminState(StatesGroup):
     waiting_logs_channel = State()
     waiting_plan_create = State()
     waiting_plan_grant = State()
+    waiting_plan_edit = State()
 
 
 def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
@@ -2059,7 +2070,9 @@ async def public_plans_handler(query: CallbackQuery) -> None:
     if not plans:
         kind = "privados" if category == "user" else "para grupos"
         return await query.answer(f"Não há planos {kind} disponíveis no momento.", show_alert=True)
-    text = ["<b>📦 Planos disponíveis</b>", "", "Escolha um plano para gerar seu PIX:"]
+    section_title = "🔐 Planos privados" if category == "user" else "👥 Planos para este grupo"
+    context_hint = "Este acesso funciona no seu chat privado com o bot." if category == "user" else "Este acesso será liberado para este grupo após a confirmação do PIX."
+    text = [f"<b>📦 {section_title}</b>", "", context_hint, "", "Escolha um plano para gerar seu PIX:"]
     for _, name, _, duration_days, price, _ in plans:
         text.append(f"° <b>{html.escape(name)}:</b> <code>{duration_days} dias | R$ {price:.2f}</code>")
     await query.message.answer("\n".join(text), reply_markup=public_plans_keyboard(plans))
@@ -2437,6 +2450,44 @@ async def admin_plan_editor_handler(query: CallbackQuery) -> None:
         reply_markup=plan_editor_keyboard(plan),
     )
     await query.answer()
+
+
+@router.callback_query(F.data.startswith("admin:plan_edit:"))
+async def admin_plan_edit_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    plan = await get_plan(int(query.data.rsplit(":", 1)[1]))
+    if not plan:
+        return await query.answer("Plano não encontrado.", show_alert=True)
+    await state.update_data(edit_plan_id=plan[0])
+    await state.set_state(AdminState.waiting_plan_edit)
+    await query.message.answer(
+        f"Envie o novo tempo e valor para <b>{html.escape(plan[1])}</b> neste formato:\n\n"
+        "<code>dias | valor</code>\n\n"
+        f"Atual: <code>{plan[3]} dias | R$ {plan[4]:.2f}</code>",
+        reply_markup=cancel_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(AdminState.waiting_plan_edit, F.text)
+async def receive_plan_edit_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = [part.strip() for part in message.text.split("|")]
+    if len(parts) != 2:
+        return await message.answer("❌ Use: <code>dias | valor</code>", reply_markup=cancel_keyboard())
+    try:
+        duration_days = int(parts[0])
+        price = float(parts[1].replace(",", "."))
+    except ValueError:
+        return await message.answer("❌ Dias e valor precisam ser números válidos.", reply_markup=cancel_keyboard())
+    if duration_days <= 0 or price <= 0:
+        return await message.answer("❌ Dias e valor precisam ser maiores que zero.", reply_markup=cancel_keyboard())
+    plan_id = (await state.get_data())["edit_plan_id"]
+    await update_plan_details(plan_id, duration_days, price)
+    await state.clear()
+    await message.answer("✅ Tempo e valor atualizados.", reply_markup=plans_admin_keyboard(await get_plans()))
 
 
 @router.callback_query(F.data.startswith("admin:plan_toggle:"))
