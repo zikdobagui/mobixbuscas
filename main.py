@@ -1726,17 +1726,30 @@ def misticpay_admin_keyboard(force_join_enabled: bool = False) -> InlineKeyboard
 
 
 def plans_admin_keyboard(plans: list[tuple[int, str, str, int, float, int]]) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(
-            text=f"{'🟢' if plan[5] else '🔴'} {plan[1]} | {'Plano' if plan[2] == 'user' else 'Grupo'}",
-            callback_data=f"admin:plan:{plan[0]}",
-        )]
-        for plan in plans
-    ]
+    private_plans = [plan for plan in plans if plan[2] == "user"]
+    group_plans = [plan for plan in plans if plan[2] == "group"]
+    rows: list[list[InlineKeyboardButton]] = []
+
+    def add_section(title: str, section_plans: list[tuple[int, str, str, int, float, int]]) -> None:
+        if not section_plans:
+            return
+        rows.append([InlineKeyboardButton(text=title, callback_data="admin:plans_header")])
+        for plan in section_plans:
+            status = "🟢" if plan[5] else "🔴"
+            name = plan[1][:28] + ("…" if len(plan[1]) > 28 else "")
+            rows.append([InlineKeyboardButton(
+                text=f"{status} {name} • {plan[3]}d • R$ {plan[4]:.2f}",
+                callback_data=f"admin:plan:{plan[0]}",
+            )])
+
+    add_section("🔐 PLANOS PRIVADOS", private_plans)
+    add_section("👥 PLANOS DE GRUPO", group_plans)
+    if not plans:
+        rows.append([InlineKeyboardButton(text="📭 Nenhum plano cadastrado", callback_data="admin:plans_header")])
     rows.extend([
-        [InlineKeyboardButton(text="➕ Criar plano", callback_data="admin:plan_create")],
-        [InlineKeyboardButton(text="🎯 Liberar acesso", callback_data="admin:plan_grant")],
-        [InlineKeyboardButton(text="👥 Gerenciar acessos ativos", callback_data="admin:subscriptions")],
+        [InlineKeyboardButton(text="➕ Criar planos", callback_data="admin:plan_create")],
+        [InlineKeyboardButton(text="🎯 Liberar acesso manual", callback_data="admin:plan_grant")],
+        [InlineKeyboardButton(text="👥 Acessos ativos", callback_data="admin:subscriptions")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1756,10 +1769,10 @@ def plan_editor_keyboard(plan: tuple[int, str, str, int, float, int]) -> InlineK
 def public_plans_keyboard(plans: list[tuple[int, str, str, int, float, int]]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
-            text=f"💳 {plan[1]} | R$ {plan[4]:.2f}",
+            text=f"💳 {plan[1]} • {plan[3]} dias • R$ {plan[4]:.2f}",
             callback_data=f"plan:buy:{plan[0]}",
         )]
-        for plan in plans if plan[2] == "user"
+        for plan in plans
     ]
     rows.append([InlineKeyboardButton(text="✖️ Fechar", callback_data="plans:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2344,12 +2357,20 @@ async def admin_plans_handler(query: CallbackQuery, state: FSMContext) -> None:
         return await query.answer("Sem permissão.", show_alert=True)
     await state.clear()
     plans = await get_plans()
+    private_count = sum(plan[2] == "user" for plan in plans)
+    group_count = sum(plan[2] == "group" for plan in plans)
     await query.message.edit_text(
-        "<b>📦 Planos e acessos</b>\n\n"
-        "Crie planos para usuários ou grupos. O botão público vende apenas planos de usuário; "
-        "planos de grupo são liberados manualmente pelo ID do chat.",
+        "<b>📦 Central de planos</b>\n\n"
+        f"🔐 <b>Privados:</b> <code>{private_count}</code>\n"
+        f"👥 <b>Grupos:</b> <code>{group_count}</code>\n\n"
+        "Planos privados podem ser comprados no bot. Planos de grupo são destinados ao chat e podem ser liberados pelo ID.",
         reply_markup=plans_admin_keyboard(plans),
     )
+    await query.answer()
+
+
+@router.callback_query(F.data == "admin:plans_header")
+async def admin_plans_header_handler(query: CallbackQuery) -> None:
     await query.answer()
 
 
