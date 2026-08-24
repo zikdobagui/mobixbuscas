@@ -112,8 +112,6 @@ DEFAULT_BASES = [
 ]
 
 DEFAULT_API_BASE_URL = "http://node.tconect.xyz:1116/"
-DEFAULT_CUSTOM_API_URL = ""
-DEFAULT_CUSTOM_API_VARIABLE = ""
 DEFAULT_MISTICPAY_URL = "https://api.misticpay.com/"
 DEFAULT_PAYMENT_CPF = "71422400409"
 AUTO_DELETE_SECONDS = 120
@@ -381,10 +379,6 @@ async def setup_database() -> None:
             await database.execute("ALTER TABLE settings ADD COLUMN api_base_url TEXT")
         if "api_key" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN api_key TEXT")
-        if "custom_api_url" not in columns:
-            await database.execute("ALTER TABLE settings ADD COLUMN custom_api_url TEXT")
-        if "custom_api_variable" not in columns:
-            await database.execute("ALTER TABLE settings ADD COLUMN custom_api_variable TEXT")
         if "misticpay_url" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN misticpay_url TEXT")
         if "misticpay_client_id" not in columns:
@@ -426,14 +420,6 @@ async def setup_database() -> None:
         await database.execute(
             "UPDATE settings SET api_key = ? WHERE api_key IS NULL",
             ("",),
-        )
-        await database.execute(
-            "UPDATE settings SET custom_api_url = ? WHERE custom_api_url IS NULL",
-            (DEFAULT_CUSTOM_API_URL,),
-        )
-        await database.execute(
-            "UPDATE settings SET custom_api_variable = ? WHERE custom_api_variable IS NULL",
-            (DEFAULT_CUSTOM_API_VARIABLE,),
         )
         await database.execute(
             "UPDATE settings SET misticpay_url = ? WHERE misticpay_url IS NULL",
@@ -651,17 +637,6 @@ async def get_api_settings() -> tuple[str, str]:
     return (row[0] or DEFAULT_API_BASE_URL, row[1] or "")
 
 
-async def get_custom_api_settings() -> tuple[str, str]:
-    async with aiosqlite.connect(DB_PATH) as database:
-        cursor = await database.execute(
-            "SELECT custom_api_url, custom_api_variable FROM settings WHERE id = 1"
-        )
-        row = await cursor.fetchone()
-    if not row:
-        return DEFAULT_CUSTOM_API_URL, DEFAULT_CUSTOM_API_VARIABLE
-    return (row[0] or DEFAULT_CUSTOM_API_URL, row[1] or DEFAULT_CUSTOM_API_VARIABLE)
-
-
 async def get_misticpay_settings() -> tuple[str, str, str, str, str]:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
@@ -712,19 +687,6 @@ async def save_api_settings(api_base_url: str, api_key: str) -> None:
             WHERE id = 1
             """,
             (api_base_url, api_key),
-        )
-        await database.commit()
-
-
-async def save_custom_api_settings(custom_api_url: str, custom_api_variable: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as database:
-        await database.execute(
-            """
-            UPDATE settings
-            SET custom_api_url = ?, custom_api_variable = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = 1
-            """,
-            (custom_api_url, custom_api_variable),
         )
         await database.commit()
 
@@ -922,6 +884,7 @@ def normalize_command_name(command: str) -> str:
 def extract_command_name_from_base(base: dict) -> str | None:
     url = (base.get("url") or "").strip()
     name_text = (base.get("name") or "").strip().lower()
+    known_commands = r"(cpf|nome|placa|telefone|email|cep|cnpj|motor|chassi|score|inss|cpfsus|fotonaci|fotope)"
 
     if not url:
         url = ""
@@ -934,13 +897,13 @@ def extract_command_name_from_base(base: dict) -> str | None:
     if len(segments) >= 2:
         command = segments[-2]
         version = segments[-1]
-    else:
-        match = re.search(r"\b(cpf|nome|placa|telefone|email|cep|cnpj|motor|chassi|score|inss|cpfsus|fotonaci|fotope)\b", name_text)
+    if not re.fullmatch(known_commands, command):
+        match = re.search(rf"\b{known_commands}\b", name_text)
         if match:
             command = match.group(1)
-        version_match = re.search(r"\bv(\d+)\b", name_text)
-        if version_match:
-            version = f"v{version_match.group(1)}"
+    version_match = re.search(r"\bv(\d+)\b", name_text)
+    if version_match:
+        version = f"v{version_match.group(1)}"
 
     if command == "fotonaci":
         command = "foto"
@@ -1014,26 +977,45 @@ def build_api_command_url(api_base_url: str, api_key: str, spec: dict, value: st
     return f"{base}{spec['path'].lstrip('/')}?{query}"
 
 
-def build_custom_api_url(custom_api_url: str, custom_api_variable: str, value: str) -> str:
-    template = custom_api_url.strip()
-    variable = custom_api_variable.strip()
+def build_configured_base_url(api_base_url: str, api_key: str, spec: dict, value: str, configured_url: str) -> str:
+    template = configured_url.strip()
+    if not template:
+        return build_api_command_url(api_base_url, api_key, spec, value)
+
+    if not re.match(r"^https?://", template, re.IGNORECASE):
+        template = api_base_url.rstrip("/") + "/" + template.lstrip("/")
+
     encoded_value = urllib.parse.quote_plus(value)
+    placeholders = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_-]*)\}", template))
+    for placeholder in placeholders:
+        template = template.replace("{" + placeholder + "}", encoded_value)
 
-    if variable:
-        placeholder = "{" + variable + "}"
-        if placeholder in template:
-            return template.replace(placeholder, encoded_value)
+    parsed = urllib.parse.urlsplit(template)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    updated_query: list[tuple[str, str]] = []
+    has_api_key = False
+    has_param = False
+    for key, current_value in query:
+        lowered = key.lower()
+        if lowered == "apikey":
+            has_api_key = True
+            updated_query.append((key, api_key))
+        elif key == spec["param"]:
+            has_param = True
+            updated_query.append((key, value))
+        elif current_value.lower() in {"seutoken", "token"} and api_key:
+            updated_query.append((key, api_key))
+        else:
+            updated_query.append((key, current_value))
 
-    if "{valor}" in template:
-        return template.replace("{valor}", encoded_value)
-    if "{value}" in template:
-        return template.replace("{value}", encoded_value)
+    if api_key and not has_api_key:
+        updated_query.append(("apikey", api_key))
+    if not has_param and not placeholders:
+        updated_query.append((spec["param"], value))
 
-    if not variable:
-        variable = "valor"
-
-    separator = "&" if urllib.parse.urlparse(template).query else "?"
-    return f"{template}{separator}{urllib.parse.urlencode({variable: value})}"
+    return urllib.parse.urlunsplit(
+        parsed._replace(query=urllib.parse.urlencode(updated_query))
+    )
 
 
 def sanitize_api_result(data: object) -> object:
@@ -1863,19 +1845,14 @@ async def fetch_api_data(
     api_key: str,
     spec: dict,
     value: str,
-    custom_api_url: str = "",
-    custom_api_variable: str = "",
+    configured_url: str = "",
     timeout: int = 60,
 ) -> object:
-    url = (
-        build_custom_api_url(custom_api_url, custom_api_variable, value)
-        if custom_api_url
-        else build_api_command_url(api_base_url, api_key, spec, value)
-    )
+    url = build_configured_base_url(api_base_url, api_key, spec, value, configured_url)
     logger.info(
         "Enviando consulta | comando=/%s | parametro=%s | valor=%r | url=%s",
         spec["aliases"][0],
-        custom_api_variable or spec["param"],
+        spec["param"],
         value,
         url,
     )
@@ -1915,6 +1892,16 @@ async def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict
     return online_candidates or unique_candidates
 
 
+async def configured_url_for_spec(spec: dict) -> str:
+    bases = await get_bases()
+    aliases = {normalize_command_name(alias) for alias in spec["aliases"]}
+    for base in bases:
+        command_name = extract_command_name_from_base(base)
+        if command_name and normalize_command_name(command_name) in aliases:
+            return base.get("url") or ""
+    return ""
+
+
 async def fetch_api_data_with_fallback(
     api_base_url: str,
     api_key: str,
@@ -1922,19 +1909,7 @@ async def fetch_api_data_with_fallback(
     primary_spec: dict,
     value: str,
     status_message: Message,
-    custom_api_url: str = "",
-    custom_api_variable: str = "",
 ) -> object:
-    if custom_api_url:
-        return await fetch_api_data(
-            api_base_url,
-            api_key,
-            primary_spec,
-            value,
-            custom_api_url=custom_api_url,
-            custom_api_variable=custom_api_variable,
-        )
-
     candidates = await fallback_specs_for(command_name, primary_spec)
     last_error: Exception | None = None
 
@@ -1945,6 +1920,7 @@ async def fetch_api_data_with_fallback(
                 api_key,
                 candidate,
                 value,
+                await configured_url_for_spec(candidate),
                 timeout=FALLBACK_TIMEOUT_SECONDS if index < len(candidates) - 1 else 60,
             )
         except (urllib.error.URLError, TimeoutError, ValueError) as error:
@@ -2073,7 +2049,6 @@ def api_admin_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Alterar base", callback_data="admin:api_base")],
             [InlineKeyboardButton(text="🔐 Alterar key", callback_data="admin:api_key")],
-            [InlineKeyboardButton(text="🌐 URL personalizada", callback_data="admin:custom_api")],
             [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
         ]
     )
@@ -2193,7 +2168,7 @@ class AdminState(StatesGroup):
     waiting_button_emoji = State()
     waiting_api_base = State()
     waiting_api_key = State()
-    waiting_custom_api = State()
+    waiting_base_url = State()
     waiting_misticpay_url = State()
     waiting_misticpay_client_id = State()
     waiting_misticpay_client_secret = State()
@@ -2278,7 +2253,7 @@ def bases_admin_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             text=f"{base['name']} {'🟢' if base['online'] else '🔴'}",
-            callback_data=f"admin:base_toggle:{index}",
+            callback_data=f"admin:base:{index}",
             style="success" if base["online"] else "danger",
         )
         for index, base in enumerate(bases)
@@ -2286,6 +2261,17 @@ def bases_admin_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:base_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def base_editor_keyboard(index: int, base: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔴 Desativar" if base.get("online") else "🟢 Ativar",
+            callback_data=f"admin:base_toggle:{index}",
+        )],
+        [InlineKeyboardButton(text="🔗 Alterar URL", callback_data=f"admin:base_url:{index}")],
+        [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:bases")],
+    ])
 
 
 # -----------------------------------------------------------------------------
@@ -2613,6 +2599,30 @@ async def admin_bases_handler(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
 
 
+@router.callback_query(F.data.regexp(r"^admin:base:\d+$"))
+async def admin_base_editor_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    await state.clear()
+    index = int(query.data.rsplit(":", 1)[1])
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        return await query.answer("Base não encontrada.", show_alert=True)
+
+    base = bases[index]
+    await query.message.edit_text(
+        "<b>🗂 Editar base</b>\n\n"
+        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
+        f"URL: <code>{html.escape(base.get('url') or 'não configurada')}</code>\n\n"
+        "A URL pode ser completa ou relativa. Use variável entre chaves, exemplo: "
+        "<code>https://api.site.com/consulta?nome={nome}</code>",
+        reply_markup=base_editor_keyboard(index, base),
+    )
+    await query.answer()
+
+
 @router.callback_query(F.data.startswith("admin:base_toggle:"))
 async def admin_base_toggle_handler(query: CallbackQuery) -> None:
     if not is_admin(query.from_user.id):
@@ -2623,8 +2633,73 @@ async def admin_base_toggle_handler(query: CallbackQuery) -> None:
         return await query.answer("Base não encontrada.", show_alert=True)
     bases[index]["online"] = not bases[index]["online"]
     await save_bases(bases)
-    await query.message.edit_reply_markup(reply_markup=bases_admin_keyboard(bases))
+    base = bases[index]
+    await query.message.edit_text(
+        "<b>🗂 Editar base</b>\n\n"
+        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
+        f"URL: <code>{html.escape(base.get('url') or 'não configurada')}</code>",
+        reply_markup=base_editor_keyboard(index, base),
+    )
     await query.answer("Status atualizado.")
+
+
+@router.callback_query(F.data.startswith("admin:base_url:"))
+async def admin_base_url_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    index = int(query.data.rsplit(":", 1)[1])
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        return await query.answer("Base não encontrada.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_base_url)
+    await state.update_data(base_index=index)
+    base = bases[index]
+    await query.message.answer(
+        "<b>🔗 Alterar URL da base</b>\n\n"
+        f"Base: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"URL atual: <code>{html.escape(base.get('url') or 'não configurada')}</code>\n\n"
+        "Envie a nova URL completa ou relativa.\n"
+        "Exemplo: <code>https://api.site.com/busca?nome={nome}</code>\n"
+        "Também pode usar <code>{cpf}</code>, <code>{placa}</code>, <code>{telefone}</code> etc.\n\n"
+        "Envie <code>remover</code> para limpar a URL desta base.",
+        reply_markup=cancel_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(AdminState.waiting_base_url, F.text)
+async def receive_base_url_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    index = int(data.get("base_index", -1))
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        await state.clear()
+        return await message.answer("❌ Base não encontrada. Abra o /admin novamente.")
+
+    url = message.text.strip()
+    if url.lower() == "remover":
+        url = ""
+    elif not (re.match(r"^https?://", url, re.IGNORECASE) or re.match(r"^[^\s]+$", url)):
+        return await message.answer(
+            "❌ Envie uma URL completa ou uma rota relativa sem espaços.",
+            reply_markup=cancel_keyboard(),
+        )
+
+    bases[index]["url"] = url
+    await save_bases(bases)
+    await state.clear()
+    await message.answer(
+        "✅ URL da base salva com sucesso.\n\n"
+        f"Base: <code>{html.escape(bases[index].get('name', 'Base'))}</code>\n"
+        f"URL: <code>{html.escape(url or 'não configurada')}</code>",
+        reply_markup=base_editor_keyboard(index, bases[index]),
+    )
 
 
 @router.callback_query(F.data == "admin:base_back")
@@ -2674,16 +2749,12 @@ async def api_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
 
     await state.clear()
     api_base_url, api_key = await get_api_settings()
-    custom_api_url, custom_api_variable = await get_custom_api_settings()
     masked_key = "•" * min(len(api_key), 12) if api_key else "não configurada"
-    custom_status = "ativa" if custom_api_url else "desativada"
     await query.message.edit_text(
         "<b>🔑 Configurar API</b>\n\n"
         f"Base atual: <code>{html.escape(api_base_url)}</code>\n"
-        f"Key atual: <code>{html.escape(masked_key)}</code>\n"
-        f"URL personalizada: <code>{html.escape(custom_status)}</code>\n"
-        f"Variável: <code>{html.escape(custom_api_variable or 'não configurada')}</code>\n\n"
-        "Aqui o admin pode trocar a base padrão, cadastrar a key ou usar uma URL pronta com variável.",
+        f"Key atual: <code>{html.escape(masked_key)}</code>\n\n"
+        "Aqui o admin pode trocar a base padrão e cadastrar a key da API.",
         reply_markup=api_admin_keyboard(),
     )
     await query.answer()
@@ -2748,71 +2819,6 @@ async def receive_api_key_handler(message: Message, state: FSMContext) -> None:
     await save_api_settings(api_base_url, api_key)
     await state.clear()
     await message.answer("✅ Key/token salvo com sucesso.", reply_markup=api_admin_keyboard())
-
-
-@router.callback_query(F.data == "admin:custom_api")
-async def custom_api_handler(query: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(query.from_user.id):
-        return await query.answer("Sem permissão.", show_alert=True)
-
-    await state.set_state(AdminState.waiting_custom_api)
-    custom_api_url, custom_api_variable = await get_custom_api_settings()
-    await query.message.answer(
-        "Envie a URL personalizada e a variável em linhas separadas.\n\n"
-        "Exemplo:\n"
-        "<code>https://api.site.com/consulta?token=SEU_TOKEN&amp;nome={nome}</code>\n"
-        "<code>nome</code>\n\n"
-        "Também aceita <code>{valor}</code>. Se a URL não tiver placeholder, o bot adiciona a variável no final.\n"
-        "Envie <code>remover</code> para desativar e voltar ao modo base/key.\n\n"
-        f"URL atual: <code>{html.escape(custom_api_url or 'não configurada')}</code>\n"
-        f"Variável atual: <code>{html.escape(custom_api_variable or 'não configurada')}</code>",
-        reply_markup=cancel_keyboard(),
-    )
-    await query.answer()
-
-
-@router.message(AdminState.waiting_custom_api, F.text)
-async def receive_custom_api_handler(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
-        return
-
-    text = message.text.strip()
-    if text.lower() == "remover":
-        await save_custom_api_settings("", "")
-        await state.clear()
-        await message.answer("✅ URL personalizada removida. O bot voltou ao modo base/key.", reply_markup=api_admin_keyboard())
-        return
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) < 2:
-        return await message.answer(
-            "❌ Envie em duas linhas: primeiro a URL, depois o nome da variável.\n\n"
-            "Exemplo:\n"
-            "<code>https://api.site.com/consulta?nome={nome}</code>\n"
-            "<code>nome</code>",
-            reply_markup=cancel_keyboard(),
-        )
-
-    custom_api_url, custom_api_variable = lines[0], lines[1]
-    if not re.match(r"^https?://", custom_api_url, re.IGNORECASE):
-        return await message.answer(
-            "❌ A URL precisa começar com http:// ou https://.",
-            reply_markup=cancel_keyboard(),
-        )
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", custom_api_variable):
-        return await message.answer(
-            "❌ A variável deve ter apenas letras, números, _ ou -, e começar com letra ou _.",
-            reply_markup=cancel_keyboard(),
-        )
-
-    await save_custom_api_settings(custom_api_url, custom_api_variable)
-    await state.clear()
-    await message.answer(
-        "✅ URL personalizada salva com sucesso.\n\n"
-        f"URL: <code>{html.escape(custom_api_url)}</code>\n"
-        f"Variável: <code>{html.escape(custom_api_variable)}</code>",
-        reply_markup=api_admin_keyboard(),
-    )
 
 
 @router.callback_query(F.data == "admin:plans")
@@ -3551,8 +3557,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
         value,
     )
     api_base_url, api_key = await get_api_settings()
-    custom_api_url, custom_api_variable = await get_custom_api_settings()
-    if not api_key and not custom_api_url:
+    if not api_key:
         await message.answer("A key da API ainda não foi configurada no /admin.")
         return
 
@@ -3566,8 +3571,6 @@ async def dynamic_api_command_handler(message: Message) -> None:
             spec,
             value,
             status_message,
-            custom_api_url,
-            custom_api_variable,
         )
     except urllib.error.HTTPError as error:
         detail = await asyncio.to_thread(error.read) if error.fp else b""
