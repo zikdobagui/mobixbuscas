@@ -1452,6 +1452,42 @@ async def web_bases_api() -> dict:
     }
 
 
+@web_app.get("/api/planos")
+async def web_plans_api() -> dict:
+    plans = await get_plans(active_only=True)
+    return {
+        "bot_name": BOT_DISPLAY_NAME,
+        "bot_username": BOT_USERNAME,
+        "plans": [
+            {
+                "id": plan_id,
+                "name": name,
+                "category": category,
+                "duration_days": duration_days,
+                "price": price,
+            }
+            for plan_id, name, category, duration_days, price, _ in plans
+        ],
+    }
+
+
+@web_app.get("/planos", response_class=HTMLResponse)
+async def web_plans_page() -> str:
+    return """<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b1020"><title>Planos</title><style>
+:root{--bg:#080f1d;--panel:#10182c;--panel2:#0c1426;--line:#22304a;--text:#f7fbff;--muted:#93a8c9;--blue:#4388ff;--blue2:#2f73ef;--green:#3ddc97;--gold:#ffd166}*{box-sizing:border-box}body{margin:0;min-height:100dvh;background:radial-gradient(circle at top,#172a56 0,transparent 36%),linear-gradient(180deg,#080f1d,#111326 62%,#0a101c);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.top{position:sticky;top:0;z-index:3;border-bottom:1px solid var(--line);background:rgba(8,15,29,.94);backdrop-filter:blur(14px)}.top-inner{display:flex;align-items:center;justify-content:space-between;gap:14px;width:min(100%,1080px);margin:0 auto;padding:14px clamp(14px,4vw,24px)}.brand{display:flex;align-items:center;gap:12px;min-width:0}.logo{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:linear-gradient(145deg,#192744,#101a31);font-size:23px;border:1px solid #28395b}.brand strong{display:block;font-size:18px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brand strong span{color:var(--blue)}.brand small{display:block;color:var(--muted);margin-top:2px}.open-bot,.primary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;border:0;border-radius:12px;background:linear-gradient(180deg,var(--blue),var(--blue2));color:white;font-weight:850;text-decoration:none;padding:0 18px;cursor:pointer}.shell{width:min(100%,1080px);margin:0 auto;padding:clamp(24px,5vw,48px) clamp(14px,4vw,24px) 56px}.hero{text-align:center;margin:0 auto 26px;max-width:720px}.hero h1{margin:0 0 10px;font-size:clamp(30px,7vw,48px);line-height:1.05}.hero h1 span{color:var(--blue)}.hero p{margin:0;color:#a6bce0;font-size:clamp(15px,3.5vw,17px);line-height:1.5}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:620px;margin:24px auto 28px;padding:6px;border:1px solid var(--line);border-radius:16px;background:#0b1326}.tab{border:0;border-radius:12px;background:transparent;color:#9fb4d2;font-weight:900;padding:12px;cursor:pointer}.tab.active{background:var(--blue);color:white}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:16px}.plan{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:18px;background:linear-gradient(180deg,#121c34,#0c1426);padding:20px;box-shadow:0 18px 42px rgba(0,0,0,.3)}.plan:before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,var(--blue),var(--green))}.badge{display:inline-flex;border:1px solid #265f76;border-radius:999px;background:#0e3446;color:#9fe8ff;padding:5px 10px;font-size:11px;font-weight:900;text-transform:uppercase}.plan h2{margin:16px 0 12px;font-size:20px;line-height:1.2;overflow-wrap:anywhere}.price{display:flex;align-items:flex-end;gap:6px;margin:0 0 10px}.price strong{font-size:34px;line-height:1;color:white}.price span{color:var(--muted);font-weight:700;margin-bottom:4px}.meta{display:grid;gap:9px;margin:16px 0 20px;color:#c7d8f2}.meta div{display:flex;align-items:center;gap:9px;border:1px solid #202c46;border-radius:12px;background:#0a1020;padding:11px 12px}.hint{margin:0 0 18px;color:var(--muted);line-height:1.45;font-size:14px}.empty{display:none;text-align:center;color:var(--muted);padding:36px 0}@media(max-width:560px){.top-inner{padding:12px}.brand small{display:none}.open-bot{padding:0 12px}.tabs{grid-template-columns:1fr}.plan{border-radius:15px}.price strong{font-size:30px}}
+</style></head><body><header class="top"><div class="top-inner"><div class="brand"><div class="logo">💎</div><div><strong id="brand">MOBIX <span>BUSCAS</span></strong><small>Planos disponíveis</small></div></div><a class="open-bot" id="openBot" href="#" target="_blank" rel="noopener">▷ Abrir Bot</a></div></header><main class="shell"><section class="hero"><h1>Planos do <span>Bot</span></h1><p>Escolha entre acesso privado individual ou liberação para grupos.</p></section><div class="tabs"><button class="tab active" data-cat="user">🔐 Planos privados</button><button class="tab" data-cat="group">👥 Planos para grupos</button></div><section class="grid" id="grid"></section><p class="empty" id="empty">Nenhum plano disponível nessa categoria.</p></main><script>
+const grid=document.querySelector('#grid'),empty=document.querySelector('#empty'),brand=document.querySelector('#brand'),openBot=document.querySelector('#openBot');let plans=[],active='user',botUser='';
+const esc=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const money=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+function botUrl(){return botUser?`https://t.me/${encodeURIComponent(botUser)}?start=start`:'#'}
+function render(){const items=plans.filter(p=>p.category===active);empty.style.display=items.length?'none':'block';grid.innerHTML=items.map(p=>`<article class="plan"><span class="badge">${active==='user'?'Privado':'Grupo'}</span><h2>${esc(p.name)}</h2><p class="price"><strong>${money(p.price)}</strong><span>/${p.duration_days} dias</span></p><div class="meta"><div>⏱ ${p.duration_days} dias de acesso</div><div>${active==='user'?'👤 Uso no privado':'👥 Liberação para grupo'}</div></div><p class="hint">${active==='user'?'Ideal para consultar direto no privado com mais privacidade.':'Ideal para liberar comandos em um grupo inteiro.'}</p><a class="primary" href="${botUrl()}" target="_blank" rel="noopener">↗ Comprar no Bot</a></article>`).join('')}
+document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{active=btn.dataset.cat;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b===btn));render()}));
+fetch('/api/planos').then(r=>r.json()).then(data=>{plans=data.plans||[];botUser=data.bot_username||'';const name=data.bot_name||'MOBIX BUSCAS';const parts=name.split(/\\s+/);brand.innerHTML=`${esc(parts[0]||name)} <span>${esc(parts.slice(1).join(' ')||'BOT')}</span>`;openBot.href=botUrl();render()}).catch(()=>{empty.textContent='Não foi possível carregar os planos.';empty.style.display='block'});
+</script></body></html>"""
+
+
 @web_app.get("/bases", response_class=HTMLResponse)
 async def web_bases_page() -> str:
     return """<!doctype html>
@@ -2420,15 +2456,21 @@ def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
             if int(button.get("row", 0)) != row_number:
                 continue
             is_bases_webapp = button.get("action") == "bases" and bool(WEB_RESULTS_URL)
+            is_plans_webapp = button.get("action") == "plans" and bool(WEB_RESULTS_URL)
             data = {
                 "text": format_button_text(button.get("text", "Botão")),
                 "url": (
-                    None if is_bases_webapp else button.get("url") or None
+                    None if is_bases_webapp or is_plans_webapp else button.get("url") or None
                 ),
-                "web_app": WebAppInfo(url=f"{WEB_RESULTS_URL}/bases") if is_bases_webapp else None,
+                "web_app": (
+                    WebAppInfo(url=f"{WEB_RESULTS_URL}/bases") if is_bases_webapp else
+                    WebAppInfo(url=f"{WEB_RESULTS_URL}/planos") if is_plans_webapp else
+                    None
+                ),
                 "callback_data": (
                     None if button.get("url") else
                     None if is_bases_webapp else
+                    None if is_plans_webapp else
                     "start:bases" if button.get("action") == "bases" else
                     "start:plans" if button.get("action") == "plans" else f"start:button:{index}"
                 ),
