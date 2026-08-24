@@ -1436,10 +1436,12 @@ async def web_bases_api() -> dict:
         spec = API_COMMAND_LOOKUP.get(command_name) or build_base_command_spec(base, command_name)
         if not spec:
             continue
+        param = spec.get("param") or command_name
+        display_param = "cpf" if command_name.startswith("cpf") and param == "code" else param
         commands.append({
             "name": strip_custom_emoji_tags(base.get("name") or spec["title"]),
             "command": command_name,
-            "param": spec.get("param") or command_name,
+            "param": display_param,
             "example": spec.get("example") or "VALOR",
             "online": bool(base.get("online")),
         })
