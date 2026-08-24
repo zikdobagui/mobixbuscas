@@ -778,6 +778,9 @@ async def get_bases() -> list[dict]:
                             "name": base["name"],
                             "online": bool(base.get("online")),
                             "url": base.get("url") or default_base.get("url", ""),
+                            "command": normalize_command_name(base.get("command") or ""),
+                            "param": (base.get("param") or "").strip(),
+                            "example": (base.get("example") or "").strip(),
                         }
                     )
                 elif isinstance(base, list) and len(base) == 2:
@@ -787,6 +790,9 @@ async def get_bases() -> list[dict]:
                             "name": base[0],
                             "online": bool(base[1]),
                             "url": default_base.get("url", ""),
+                            "command": "",
+                            "param": "",
+                            "example": "",
                         }
                     )
             if normalized:
@@ -882,6 +888,10 @@ def normalize_command_name(command: str) -> str:
 
 
 def extract_command_name_from_base(base: dict) -> str | None:
+    configured_command = normalize_command_name(base.get("command") or "")
+    if configured_command:
+        return configured_command
+
     url = (base.get("url") or "").strip()
     name_text = (base.get("name") or "").strip().lower()
     known_commands = r"(cpf|nome|placa|telefone|email|cep|cnpj|motor|chassi|score|inss|cpfsus|fotonaci|fotope)"
@@ -962,13 +972,44 @@ def format_base_usage(base: dict) -> str:
     if not command_name:
         return "° <b>Comando:</b> <code>/comando VALOR</code>"
 
-    spec = API_COMMAND_LOOKUP.get(command_name)
+    spec = API_COMMAND_LOOKUP.get(command_name) or build_base_command_spec(base, command_name)
     if not spec:
         return f"° <b>Comando:</b> <code>/{html.escape(command_name)} VALOR</code>"
 
     return (
         f"° <b>Comando:</b> <code>/{html.escape(command_name)} {html.escape(spec['example'])}</code>"
     )
+
+
+def build_base_command_spec(base: dict, command_name: str | None = None) -> dict | None:
+    command = normalize_command_name(command_name or base.get("command") or "")
+    if not command:
+        return None
+
+    param = (base.get("param") or "").strip()
+    if not param:
+        placeholders = re.findall(r"\{([A-Za-z_][A-Za-z0-9_-]*)\}", base.get("url") or "")
+        param = placeholders[0] if placeholders else command
+
+    return {
+        "aliases": [command],
+        "title": base.get("name") or f"Consulta {command}",
+        "path": "",
+        "param": param,
+        "example": (base.get("example") or "VALOR").strip() or "VALOR",
+    }
+
+
+async def get_command_spec(command_name: str) -> dict | None:
+    spec = API_COMMAND_LOOKUP.get(command_name)
+    if spec:
+        return spec
+
+    for base in await get_bases():
+        base_command = extract_command_name_from_base(base)
+        if base_command and normalize_command_name(base_command) == command_name:
+            return build_base_command_spec(base, command_name)
+    return None
 
 
 def build_api_command_url(api_base_url: str, api_key: str, spec: dict, value: str) -> str:
@@ -1872,6 +1913,8 @@ async def fetch_api_data(
 async def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict]:
     aliases = FALLBACK_COMMAND_GROUPS.get(command_name, ())
     candidates = [API_COMMAND_LOOKUP[alias] for alias in aliases if alias in API_COMMAND_LOOKUP]
+    if not candidates:
+        return [primary_spec]
     ordered = [primary_spec, *[candidate for candidate in candidates if candidate is not primary_spec]]
     unique_paths: set[str] = set()
     unique_candidates = [
@@ -2168,6 +2211,10 @@ class AdminState(StatesGroup):
     waiting_button_emoji = State()
     waiting_api_base = State()
     waiting_api_key = State()
+    waiting_base_create = State()
+    waiting_base_name = State()
+    waiting_base_command = State()
+    waiting_base_param = State()
     waiting_base_url = State()
     waiting_misticpay_url = State()
     waiting_misticpay_client_id = State()
@@ -2259,6 +2306,7 @@ def bases_admin_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
         for index, base in enumerate(bases)
     ]
     rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="➕ Adicionar base", callback_data="admin:base_add")])
     rows.append([InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:base_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2269,9 +2317,28 @@ def base_editor_keyboard(index: int, base: dict) -> InlineKeyboardMarkup:
             text="🔴 Desativar" if base.get("online") else "🟢 Ativar",
             callback_data=f"admin:base_toggle:{index}",
         )],
+        [InlineKeyboardButton(text="✏️ Alterar nome", callback_data=f"admin:base_name:{index}")],
+        [InlineKeyboardButton(text="⌨️ Alterar comando", callback_data=f"admin:base_command:{index}")],
+        [InlineKeyboardButton(text="🏷 Alterar variável", callback_data=f"admin:base_param:{index}")],
         [InlineKeyboardButton(text="🔗 Alterar URL", callback_data=f"admin:base_url:{index}")],
+        [InlineKeyboardButton(text="🗑 Excluir base", callback_data=f"admin:base_delete:{index}")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:bases")],
     ])
+
+
+def render_base_editor_text(base: dict) -> str:
+    command = extract_command_name_from_base(base) or "não configurado"
+    spec = build_base_command_spec(base, command) or API_COMMAND_LOOKUP.get(command)
+    param = (base.get("param") or (spec or {}).get("param") or "não configurada")
+    return (
+        "<b>🗂 Editar base</b>\n\n"
+        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"Comando: <code>/{html.escape(command)}</code>\n"
+        f"Variável: <code>{html.escape(param)}</code>\n"
+        f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
+        f"URL: <code>{html.escape(base.get('url') or 'não configurada')}</code>\n\n"
+        f"{format_base_usage(base)}"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -2599,6 +2666,72 @@ async def admin_bases_handler(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
 
 
+@router.callback_query(F.data == "admin:base_add")
+async def admin_base_add_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_base_create)
+    await query.message.answer(
+        "<b>➕ Adicionar base</b>\n\n"
+        "Envie em 4 linhas:\n"
+        "<code>Nome da base</code>\n"
+        "<code>comando</code>\n"
+        "<code>variavel</code>\n"
+        "<code>URL</code>\n\n"
+        "Exemplo:\n"
+        "<code>Consulta Nome Vip</code>\n"
+        "<code>nomevip</code>\n"
+        "<code>nome</code>\n"
+        "<code>https://api.site.com/busca?nome={nome}</code>",
+        reply_markup=cancel_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(AdminState.waiting_base_create, F.text)
+async def receive_base_create_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    lines = [line.strip() for line in message.text.splitlines() if line.strip()]
+    if len(lines) < 4:
+        return await message.answer(
+            "❌ Envie 4 linhas: nome, comando, variável e URL.",
+            reply_markup=cancel_keyboard(),
+        )
+
+    name, command, param, url = lines[0], normalize_command_name(lines[1]), lines[2], lines[3]
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,31}$", command):
+        return await message.answer(
+            "❌ O comando deve começar com letra ou _ e ter apenas letras, números ou _.",
+            reply_markup=cancel_keyboard(),
+        )
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", param):
+        return await message.answer(
+            "❌ A variável deve ter apenas letras, números, _ ou -, e começar com letra ou _.",
+            reply_markup=cancel_keyboard(),
+        )
+    if not (re.match(r"^https?://", url, re.IGNORECASE) or re.match(r"^[^\s]+$", url)):
+        return await message.answer("❌ Envie uma URL completa ou rota relativa sem espaços.", reply_markup=cancel_keyboard())
+
+    bases = await get_bases()
+    if any(extract_command_name_from_base(base) == command for base in bases):
+        return await message.answer("❌ Já existe uma base usando esse comando.", reply_markup=cancel_keyboard())
+
+    bases.append({
+        "name": name,
+        "online": True,
+        "url": url,
+        "command": command,
+        "param": param,
+        "example": "VALOR",
+    })
+    await save_bases(bases)
+    await state.clear()
+    await message.answer("✅ Base adicionada com sucesso.", reply_markup=bases_admin_keyboard(bases))
+
+
 @router.callback_query(F.data.regexp(r"^admin:base:\d+$"))
 async def admin_base_editor_handler(query: CallbackQuery, state: FSMContext) -> None:
     if not is_admin(query.from_user.id):
@@ -2612,12 +2745,7 @@ async def admin_base_editor_handler(query: CallbackQuery, state: FSMContext) -> 
 
     base = bases[index]
     await query.message.edit_text(
-        "<b>🗂 Editar base</b>\n\n"
-        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
-        f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
-        f"URL: <code>{html.escape(base.get('url') or 'não configurada')}</code>\n\n"
-        "A URL pode ser completa ou relativa. Use variável entre chaves, exemplo: "
-        "<code>https://api.site.com/consulta?nome={nome}</code>",
+        render_base_editor_text(base),
         reply_markup=base_editor_keyboard(index, base),
     )
     await query.answer()
@@ -2635,13 +2763,121 @@ async def admin_base_toggle_handler(query: CallbackQuery) -> None:
     await save_bases(bases)
     base = bases[index]
     await query.message.edit_text(
-        "<b>🗂 Editar base</b>\n\n"
-        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
-        f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
-        f"URL: <code>{html.escape(base.get('url') or 'não configurada')}</code>",
+        render_base_editor_text(base),
         reply_markup=base_editor_keyboard(index, base),
     )
     await query.answer("Status atualizado.")
+
+
+async def ask_base_field(query: CallbackQuery, state: FSMContext, index: int, field: str, prompt: str) -> None:
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        return await query.answer("Base não encontrada.", show_alert=True)
+    await state.update_data(base_index=index)
+    state_map = {
+        "name": AdminState.waiting_base_name,
+        "command": AdminState.waiting_base_command,
+        "param": AdminState.waiting_base_param,
+        "url": AdminState.waiting_base_url,
+    }
+    await state.set_state(state_map[field])
+    await query.message.answer(prompt, reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("admin:base_name:"))
+async def admin_base_name_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    index = int(query.data.rsplit(":", 1)[1])
+    await ask_base_field(query, state, index, "name", "Envie o novo nome da base.")
+
+
+@router.message(AdminState.waiting_base_name, F.text)
+async def receive_base_name_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    index = int(data.get("base_index", -1))
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        await state.clear()
+        return await message.answer("❌ Base não encontrada.")
+    name = message.text.strip()
+    if not name:
+        return await message.answer("❌ O nome não pode ficar vazio.", reply_markup=cancel_keyboard())
+    bases[index]["name"] = name
+    await save_bases(bases)
+    await state.clear()
+    await message.answer("✅ Nome da base salvo.", reply_markup=base_editor_keyboard(index, bases[index]))
+
+
+@router.callback_query(F.data.startswith("admin:base_command:"))
+async def admin_base_command_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    index = int(query.data.rsplit(":", 1)[1])
+    await ask_base_field(
+        query,
+        state,
+        index,
+        "command",
+        "Envie o novo comando sem barra.\n\nExemplo: <code>nomevip</code>",
+    )
+
+
+@router.message(AdminState.waiting_base_command, F.text)
+async def receive_base_command_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    index = int(data.get("base_index", -1))
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        await state.clear()
+        return await message.answer("❌ Base não encontrada.")
+    command = normalize_command_name(message.text)
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,31}$", command):
+        return await message.answer("❌ Comando inválido. Use letras, números ou _.", reply_markup=cancel_keyboard())
+    if any(i != index and extract_command_name_from_base(base) == command for i, base in enumerate(bases)):
+        return await message.answer("❌ Já existe uma base usando esse comando.", reply_markup=cancel_keyboard())
+    bases[index]["command"] = command
+    await save_bases(bases)
+    await state.clear()
+    await message.answer("✅ Comando da base salvo.", reply_markup=base_editor_keyboard(index, bases[index]))
+
+
+@router.callback_query(F.data.startswith("admin:base_param:"))
+async def admin_base_param_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+    index = int(query.data.rsplit(":", 1)[1])
+    await ask_base_field(
+        query,
+        state,
+        index,
+        "param",
+        "Envie o nome da variável/parâmetro.\n\nExemplo: <code>nome</code>, <code>cpf</code>, <code>placa</code>",
+    )
+
+
+@router.message(AdminState.waiting_base_param, F.text)
+async def receive_base_param_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    index = int(data.get("base_index", -1))
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        await state.clear()
+        return await message.answer("❌ Base não encontrada.")
+    param = message.text.strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", param):
+        return await message.answer("❌ Variável inválida.", reply_markup=cancel_keyboard())
+    bases[index]["param"] = param
+    await save_bases(bases)
+    await state.clear()
+    await message.answer("✅ Variável da base salva.", reply_markup=base_editor_keyboard(index, bases[index]))
 
 
 @router.callback_query(F.data.startswith("admin:base_url:"))
@@ -2700,6 +2936,26 @@ async def receive_base_url_handler(message: Message, state: FSMContext) -> None:
         f"URL: <code>{html.escape(url or 'não configurada')}</code>",
         reply_markup=base_editor_keyboard(index, bases[index]),
     )
+
+
+@router.callback_query(F.data.startswith("admin:base_delete:"))
+async def admin_base_delete_handler(query: CallbackQuery) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    index = int(query.data.rsplit(":", 1)[1])
+    bases = await get_bases()
+    if not 0 <= index < len(bases):
+        return await query.answer("Base não encontrada.", show_alert=True)
+
+    removed = bases.pop(index)
+    await save_bases(bases)
+    await query.message.edit_text(
+        f"✅ Base removida: <code>{html.escape(removed.get('name', 'Base'))}</code>\n\n"
+        "Lista atualizada:",
+        reply_markup=bases_admin_keyboard(bases),
+    )
+    await query.answer("Base removida.")
 
 
 @router.callback_query(F.data == "admin:base_back")
@@ -3528,7 +3784,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
     parts = text.split(maxsplit=1)
     command_part = parts[0]
     command_name = normalize_command_name(command_part.split("@", 1)[0])
-    spec = API_COMMAND_LOOKUP.get(command_name)
+    spec = await get_command_spec(command_name)
     if not spec:
         return
 
