@@ -45,6 +45,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS_TEXT = os.getenv("ADMIN_IDS", "").strip()
 DB_PATH = os.getenv("DB_PATH", "bot.db").strip()
 WEB_RESULTS_URL = os.getenv("WEB_RESULTS_URL", "https://mobixretornoconsulta.discloud.app").strip().rstrip("/")
+BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "MOBIX BUSCAS").strip() or "MOBIX BUSCAS"
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
 
 if not BOT_TOKEN:
     raise RuntimeError("Defina BOT_TOKEN no arquivo .env")
@@ -1423,6 +1425,53 @@ async def web_result_api(token: str) -> dict:
     return {"result": result[0], "expires_at": result[1], "image_base64": result[2]}
 
 
+@web_app.get("/api/bases")
+async def web_bases_api() -> dict:
+    commands = []
+    for base in await get_bases():
+        command_name = extract_command_name_from_base(base)
+        if not command_name:
+            continue
+        spec = API_COMMAND_LOOKUP.get(command_name) or build_base_command_spec(base, command_name)
+        if not spec:
+            continue
+        commands.append({
+            "name": strip_custom_emoji_tags(base.get("name") or spec["title"]),
+            "command": command_name,
+            "param": spec.get("param") or command_name,
+            "example": spec.get("example") or "VALOR",
+            "online": bool(base.get("online")),
+        })
+    return {
+        "bot_name": BOT_DISPLAY_NAME,
+        "bot_username": BOT_USERNAME,
+        "commands": commands,
+    }
+
+
+@web_app.get("/bases", response_class=HTMLResponse)
+async def web_bases_page() -> str:
+    return """<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d1324"><title>Bases disponíveis</title>
+<style>
+:root{--bg:#080f1d;--panel:#10182c;--panel2:#0c1426;--line:#22304a;--text:#f4f7fb;--muted:#8ea3c2;--blue:#4388ff;--blue2:#2f73ef;--green:#38d48a;--danger:#ff6b7a}*{box-sizing:border-box}body{margin:0;min-height:100dvh;background:linear-gradient(180deg,#080f1d,#111326 58%,#0a101c);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.top{position:sticky;top:0;z-index:3;border-bottom:1px solid var(--line);background:rgba(8,15,29,.94);backdrop-filter:blur(14px)}.top-inner{display:flex;align-items:center;justify-content:space-between;gap:14px;width:min(100%,1100px);margin:0 auto;padding:14px clamp(14px,4vw,24px)}.brand{display:flex;align-items:center;gap:12px;min-width:0}.logo{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:linear-gradient(145deg,#192744,#101a31);font-size:24px;border:1px solid #28395b}.brand strong{display:block;font-size:18px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brand strong span{color:var(--blue)}.brand small{display:block;color:var(--muted);margin-top:2px}.open-bot,.primary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;border:0;border-radius:12px;background:linear-gradient(180deg,var(--blue),var(--blue2));color:white;font-weight:800;text-decoration:none;padding:0 18px;cursor:pointer}.shell{width:min(100%,1100px);margin:0 auto;padding:clamp(22px,5vw,48px) clamp(14px,4vw,24px) 56px}.hero{text-align:center;margin:0 auto 28px;max-width:720px}.hero h1{margin:0 0 10px;font-size:clamp(30px,7vw,48px);line-height:1.05}.hero h1 span{color:var(--blue)}.hero p{margin:0;color:#9bb4d9;font-size:clamp(15px,3.5vw,17px);line-height:1.5}.search{display:flex;align-items:center;gap:10px;margin:24px auto 14px;max-width:720px;border:1px solid var(--line);border-radius:16px;background:#0d1427;padding:0 14px}.search input{width:100%;height:50px;border:0;outline:0;background:transparent;color:var(--text);font-size:16px}.search svg{flex:0 0 auto;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:16px auto 10px;max-width:760px}.chip{border:1px solid var(--line);border-radius:999px;background:#10182b;color:#9fb4d2;font-weight:800;padding:8px 16px;cursor:pointer;text-transform:uppercase}.chip.active{background:var(--blue);border-color:var(--blue);color:white}.count{text-align:center;color:var(--muted);font-size:14px;margin:14px 0 34px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px}.card{border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,#111a31,#0d1427);padding:18px;box-shadow:0 18px 42px rgba(0,0,0,.28)}.card-head{display:flex;gap:12px;align-items:center;margin-bottom:14px}.icon{display:grid;place-items:center;width:44px;height:44px;border:1px solid #226449;border-radius:12px;background:#123a35;color:#8dffd0}.title{min-width:0}.title h2{margin:0;font-size:16px;line-height:1.2;text-transform:uppercase;overflow-wrap:anywhere}.tag{display:inline-flex;margin-top:6px;border:1px solid #1d7d5c;border-radius:999px;background:#0d493a;color:#75f5bf;padding:4px 9px;font-size:11px;font-weight:850;text-transform:uppercase}.tag.off{border-color:#74404a;background:#3a1420;color:#ff9baa}.box{border:1px solid #202c46;border-radius:13px;background:#0a1020;padding:13px 14px;margin:12px 0 14px}.box small{display:block;color:var(--muted);margin-bottom:7px}.cmd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#d8e7ff;overflow-wrap:anywhere}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;border:1px solid var(--line);border-radius:12px;background:#0e172b;color:white;font-weight:800;cursor:pointer;text-decoration:none}.empty{display:none;text-align:center;color:var(--muted);padding:36px 0}@media(max-width:560px){.top-inner{padding:12px}.brand small{display:none}.open-bot{padding:0 12px}.shell{padding-top:28px}.actions{grid-template-columns:1fr}.card{border-radius:14px}}
+</style></head><body><header class="top"><div class="top-inner"><div class="brand"><div class="logo">🔎</div><div><strong id="brand">MOBIX <span>BUSCAS</span></strong><small>Comandos disponíveis</small></div></div><a class="open-bot" id="openBot" href="#" target="_blank" rel="noopener">▷ Abrir Bot</a></div></header><main class="shell"><section class="hero"><h1>Comandos do <span>Bot</span></h1><p>Toque em um comando para copiar ou abrir diretamente no Telegram</p><label class="search"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="m21 21-4.3-4.3m1.3-5.2a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><input id="search" placeholder="Buscar comando..." autocomplete="off"></label><div class="chips" id="chips"></div><p class="count" id="count"></p></section><section class="grid" id="grid"></section><p class="empty" id="empty">Nenhum comando encontrado.</p></main><script>
+const grid=document.querySelector('#grid'),chips=document.querySelector('#chips'),search=document.querySelector('#search'),count=document.querySelector('#count'),empty=document.querySelector('#empty'),brand=document.querySelector('#brand'),openBot=document.querySelector('#openBot');let commands=[],active='todos',botUser='';
+const label=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const category=c=>String(c.param||c.command||'outros').toLowerCase();
+const commandText=c=>`/${c.command} ${c.example||'VALOR'}`;
+function botUrl(text=''){return botUser?`https://t.me/${encodeURIComponent(botUser)}${text?`?text=${encodeURIComponent(text)}`:''}`:'#'}
+function renderChips(){const cats=['todos',...Array.from(new Set(commands.map(category))).sort()];chips.innerHTML=cats.map(cat=>`<button class="chip ${cat===active?'active':''}" data-cat="${label(cat)}">${label(cat)}</button>`).join('')}
+function filtered(){const q=search.value.trim().toLowerCase();return commands.filter(c=>(active==='todos'||category(c)===active)&&[c.name,c.command,c.param].join(' ').toLowerCase().includes(q))}
+function render(){const items=filtered();count.textContent=`${items.length} comando${items.length===1?'':'s'} encontrado${items.length===1?'':'s'}`;empty.style.display=items.length?'none':'block';grid.innerHTML=items.map(c=>{const cmd=commandText(c);return `<article class="card"><div class="card-head"><div class="icon">⌕</div><div class="title"><h2>${label(c.name)}</h2><span class="tag ${c.online?'':'off'}">${label(category(c))}</span></div></div><div class="box"><small>Comando:</small><div class="cmd">${label(cmd)}</div></div><div class="actions"><button class="ghost" data-copy="${label(cmd)}">⧉ Copiar</button><a class="primary" href="${botUrl(cmd)}" target="_blank" rel="noopener">↗ Usar no Bot</a></div></article>`}).join('')}
+chips.addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;active=b.dataset.cat;renderChips();render()});
+grid.addEventListener('click',async e=>{const b=e.target.closest('[data-copy]');if(!b)return;try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='✓ Copiado';setTimeout(()=>b.textContent='⧉ Copiar',1300)}catch{b.textContent='Selecione e copie';}});
+search.addEventListener('input',render);
+fetch('/api/bases').then(r=>r.json()).then(data=>{commands=data.commands||[];botUser=data.bot_username||'';const name=data.bot_name||'MOBIX BUSCAS';const parts=name.split(/\\s+/);brand.innerHTML=`${label(parts[0]||name)} <span>${label(parts.slice(1).join(' ')||'BOT')}</span>`;openBot.href=botUrl();renderChips();render()}).catch(()=>{count.textContent='Não foi possível carregar os comandos.'});
+</script></body></html>"""
+
+
 @web_app.get("/r/{token}", response_class=HTMLResponse)
 async def web_result_page(token: str) -> str:
     return """<!doctype html>
@@ -2337,9 +2386,13 @@ def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
                 continue
             data = {
                 "text": format_button_text(button.get("text", "Botão")),
-                "url": button.get("url") or None,
+                "url": (
+                    f"{WEB_RESULTS_URL}/bases" if button.get("action") == "bases" and WEB_RESULTS_URL
+                    else button.get("url") or None
+                ),
                 "callback_data": (
                     None if button.get("url") else
+                    None if button.get("action") == "bases" and WEB_RESULTS_URL else
                     "start:bases" if button.get("action") == "bases" else
                     "start:plans" if button.get("action") == "plans" else f"start:button:{index}"
                 ),
@@ -4365,12 +4418,19 @@ async def button_layout_handler(query: CallbackQuery) -> None:
 # -----------------------------------------------------------------------------
 
 async def run_bot() -> None:
+    global BOT_USERNAME
     await setup_database()
 
     bot = Bot(
         BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    if not BOT_USERNAME:
+        try:
+            bot_me = await bot.get_me()
+            BOT_USERNAME = bot_me.username or ""
+        except TelegramBadRequest:
+            BOT_USERNAME = ""
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     payment_monitor_task = asyncio.create_task(monitor_pending_payments(bot))
