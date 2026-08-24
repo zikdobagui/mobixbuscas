@@ -78,6 +78,10 @@ DEFAULT_NEW_USER_REFERENCE_TEXT = (
     "Username: <code>{USERNAME}</code>\n"
     "Entrada: <code>{DATE} {TIME}</code>"
 )
+DEFAULT_GROUP_WELCOME_TEXT = (
+    "<b>Bem-vindo, {MENTION}!</b>\n\n"
+    "Você entrou no grupo <b>{CHAT_TITLE}</b>."
+)
 REFERENCE_BUTTON_COLORS = ("🟦", "🟩", "🟥", "⬛")
 
 DEFAULT_BUTTONS = [
@@ -411,6 +415,12 @@ async def setup_database() -> None:
             await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_button_url TEXT")
         if "new_user_reference_button_color" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN new_user_reference_button_color TEXT")
+        if "group_welcome_enabled" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN group_welcome_enabled INTEGER")
+        if "group_welcome_text" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN group_welcome_text TEXT")
+        if "group_welcome_photo_file_id" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN group_welcome_photo_file_id TEXT")
         await database.execute(
             "INSERT OR IGNORE INTO settings(id, start_text) VALUES(1, ?)",
             (DEFAULT_START,),
@@ -466,6 +476,14 @@ async def setup_database() -> None:
         await database.execute(
             "UPDATE settings SET new_user_reference_button_color = ? WHERE new_user_reference_button_color IS NULL",
             (REFERENCE_BUTTON_COLORS[0],),
+        )
+        await database.execute(
+            "UPDATE settings SET group_welcome_enabled = ? WHERE group_welcome_enabled IS NULL",
+            (0,),
+        )
+        await database.execute(
+            "UPDATE settings SET group_welcome_text = ? WHERE group_welcome_text IS NULL",
+            (DEFAULT_GROUP_WELCOME_TEXT,),
         )
         await database.execute(
             """
@@ -599,6 +617,18 @@ async def register_user(message: Message) -> bool:
     return is_new
 
 
+async def get_registered_users() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as database:
+        cursor = await database.execute(
+            "SELECT user_id, username, first_name, last_name FROM users ORDER BY last_seen_at DESC"
+        )
+        rows = await cursor.fetchall()
+    return [
+        {"id": int(row[0]), "username": row[1] or "", "first_name": row[2] or "usuário", "last_name": row[3] or ""}
+        for row in rows
+    ]
+
+
 async def get_new_user_reference_settings() -> tuple[str, str | None, str, str, str]:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
@@ -632,6 +662,31 @@ async def save_new_user_reference_settings(
                 new_user_reference_button_color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1
             """,
             (text, photo_file_id, button_text, button_url, button_color),
+        )
+        await database.commit()
+
+
+async def get_group_welcome_settings() -> tuple[bool, str, str | None]:
+    async with aiosqlite.connect(DB_PATH) as database:
+        cursor = await database.execute(
+            "SELECT group_welcome_enabled, group_welcome_text, group_welcome_photo_file_id FROM settings WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+    if not row:
+        return False, DEFAULT_GROUP_WELCOME_TEXT, None
+    return bool(row[0]), row[1] or DEFAULT_GROUP_WELCOME_TEXT, row[2]
+
+
+async def save_group_welcome_settings(enabled: bool, text: str, photo_file_id: str | None) -> None:
+    async with aiosqlite.connect(DB_PATH) as database:
+        await database.execute(
+            """
+            UPDATE settings
+            SET group_welcome_enabled = ?, group_welcome_text = ?,
+                group_welcome_photo_file_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = 1
+            """,
+            (int(enabled), text, photo_file_id),
         )
         await database.commit()
 
@@ -860,6 +915,29 @@ def render_new_user_reference(template: str, user) -> str:
         "{WEEKDAY}": now.strftime("%A"),
         "{MENTION}": build_user_mention(user),
         "{USERNAME}": html.escape(f"@{user.username}" if user.username else "sem username"),
+    }
+    for key, value in values.items():
+        template = template.replace(key, value)
+    return template
+
+
+def render_group_welcome(template: str, user, chat) -> str:
+    name = user.first_name or "Usuário"
+    surname = user.last_name or ""
+    username = f"@{user.username}" if user.username else "sem username"
+    values = {
+        "{ID}": str(user.id),
+        "{USER_ID}": str(user.id),
+        "{NAME}": html.escape(name),
+        "{NOME}": html.escape(name),
+        "{SURNAME}": html.escape(surname),
+        "{NAMESURNAME}": html.escape(f"{name} {surname}".strip()),
+        "{USERNAME}": html.escape(username),
+        "{USUARIO}": html.escape(username),
+        "{MENTION}": build_user_mention(user),
+        "{CHAT_ID}": str(chat.id),
+        "{CHAT_TITLE}": html.escape(getattr(chat, "title", "") or "grupo"),
+        "{GRUPO}": html.escape(getattr(chat, "title", "") or "grupo"),
     }
     for key, value in values.items():
         template = template.replace(key, value)
@@ -2236,6 +2314,10 @@ def main_admin_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🎨 Start", callback_data="admin:start_menu"),
                 InlineKeyboardButton(text="🗂 Bases", callback_data="admin:bases"),
             ],
+            [
+                InlineKeyboardButton(text="📢 Broadcast", callback_data="admin:broadcast"),
+                InlineKeyboardButton(text="👋 Boas-vindas", callback_data="admin:welcome"),
+            ],
             [InlineKeyboardButton(text="💰 Planos e pagamentos", callback_data="admin:section_sales")],
             [
                 InlineKeyboardButton(text="📦 Planos", callback_data="admin:plans"),
@@ -2456,6 +2538,9 @@ class AdminState(StatesGroup):
     waiting_plan_grant = State()
     waiting_plan_duration = State()
     waiting_plan_price = State()
+    waiting_broadcast_text = State()
+    waiting_group_welcome_text = State()
+    waiting_group_welcome_photo = State()
     waiting_new_user_reference_text = State()
     waiting_new_user_reference_photo = State()
     waiting_new_user_reference_button_text = State()
@@ -2543,6 +2628,23 @@ def bases_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="✖️ Fechar", callback_data="bases:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def group_welcome_keyboard(enabled: bool, photo_configured: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔴 Desativar" if enabled else "🟢 Ativar",
+            callback_data="admin:welcome_toggle",
+        )],
+        [
+            InlineKeyboardButton(text="✏️ Texto", callback_data="admin:welcome_text"),
+            InlineKeyboardButton(
+                text="🗑 Imagem" if photo_configured else "🖼 Imagem",
+                callback_data="admin:welcome_photo",
+            ),
+        ],
+        [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
+    ])
 
 
 def bases_admin_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
@@ -2759,6 +2861,30 @@ async def admin_section_header_handler(query: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("start:button:"))
 async def unconfigured_start_button_handler(query: CallbackQuery) -> None:
     await query.answer("Este botão ainda não tem um link. Configure-o no /admin.", show_alert=True)
+
+
+@router.message(F.new_chat_members)
+async def group_new_members_handler(message: Message) -> None:
+    enabled, text, photo = await get_group_welcome_settings()
+    if not enabled:
+        return
+
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    for user in message.new_chat_members:
+        if getattr(user, "is_bot", False):
+            continue
+        rendered = render_group_welcome(text, user, message.chat)
+        try:
+            if photo:
+                await message.answer_photo(photo, caption=rendered, parse_mode=ParseMode.HTML)
+            else:
+                await message.answer(rendered, parse_mode=ParseMode.HTML)
+        except TelegramBadRequest:
+            logger.exception("Falha ao enviar boas-vindas no chat %s", message.chat.id)
 
 
 @router.callback_query(F.data == "required:check")
@@ -3229,6 +3355,149 @@ async def start_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
         reply_markup=start_keyboard(bool(photo_file_id)),
     )
     await query.answer()
+
+
+@router.callback_query(F.data == "admin:broadcast")
+async def broadcast_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_broadcast_text)
+    total_users = len(await get_registered_users())
+    await query.message.answer(
+        "<b>📢 Broadcast</b>\n\n"
+        f"Usuários cadastrados: <code>{total_users}</code>\n\n"
+        "Envie a mensagem HTML que será enviada para todos os usuários cadastrados.\n"
+        "Variáveis: <code>{ID}</code>, <code>{NAME}</code>, <code>{USERNAME}</code>, <code>{MENTION}</code>.",
+        reply_markup=cancel_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(AdminState.waiting_broadcast_text, F.text)
+async def receive_broadcast_text(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    users = await get_registered_users()
+    if not users:
+        await state.clear()
+        return await message.answer("❌ Nenhum usuário cadastrado no banco.")
+
+    sent = 0
+    failed = 0
+    status = await message.answer(f"⏳ Enviando broadcast para <code>{len(users)}</code> usuários...")
+    for user_data in users:
+        try:
+            fake_user = type("BroadcastUser", (), {
+                "id": user_data["id"],
+                "first_name": user_data["first_name"],
+                "last_name": user_data["last_name"],
+                "username": user_data["username"],
+            })()
+            text = render_group_welcome(message.text, fake_user, message.chat)
+            await message.bot.send_message(user_data["id"], text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception:
+            failed += 1
+        if (sent + failed) % 25 == 0:
+            await asyncio.sleep(1)
+
+    await state.clear()
+    await status.edit_text(
+        "<b>📢 Broadcast concluído</b>\n\n"
+        f"✅ Enviadas: <code>{sent}</code>\n"
+        f"⚠️ Falhas: <code>{failed}</code>"
+    )
+
+
+@router.callback_query(F.data == "admin:welcome")
+async def group_welcome_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    await state.clear()
+    enabled, text, photo = await get_group_welcome_settings()
+    await query.message.edit_text(
+        "<b>👋 Boas-vindas em grupos</b>\n\n"
+        f"Status: <code>{'Ativo' if enabled else 'Desativado'}</code>\n"
+        f"Imagem: <code>{'configurada' if photo else 'não configurada'}</code>\n\n"
+        "Quando ativo, o bot apaga a mensagem automática de entrada e envia uma saudação personalizada.\n\n"
+        "Variáveis: <code>{MENTION}</code>, <code>{NAME}</code>, <code>{USERNAME}</code>, "
+        "<code>{ID}</code>, <code>{CHAT_TITLE}</code>, <code>{GRUPO}</code>.",
+        reply_markup=group_welcome_keyboard(enabled, bool(photo)),
+    )
+    await query.answer()
+
+
+@router.callback_query(F.data == "admin:welcome_toggle")
+async def group_welcome_toggle_handler(query: CallbackQuery) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    enabled, text, photo = await get_group_welcome_settings()
+    await save_group_welcome_settings(not enabled, text, photo)
+    await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(not enabled, bool(photo)))
+    await query.answer("Boas-vindas atualizadas.")
+
+
+@router.callback_query(F.data == "admin:welcome_text")
+async def group_welcome_text_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_group_welcome_text)
+    await query.message.answer(
+        "Envie o novo texto HTML das boas-vindas.\n\n"
+        "Variáveis: <code>{MENTION}</code>, <code>{NAME}</code>, <code>{USERNAME}</code>, "
+        "<code>{ID}</code>, <code>{CHAT_TITLE}</code>, <code>{GRUPO}</code>.",
+        reply_markup=cancel_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(AdminState.waiting_group_welcome_text, F.text)
+async def receive_group_welcome_text(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    enabled, _, photo = await get_group_welcome_settings()
+    error = validate_start_text(message.text, bool(photo))
+    if error:
+        return await message.answer(f"❌ {html.escape(error)}", reply_markup=cancel_keyboard())
+    await save_group_welcome_settings(enabled, message.text, photo)
+    await state.clear()
+    await message.answer("✅ Texto de boas-vindas salvo.", reply_markup=group_welcome_keyboard(enabled, bool(photo)))
+
+
+@router.callback_query(F.data == "admin:welcome_photo")
+async def group_welcome_photo_handler(query: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    enabled, text, photo = await get_group_welcome_settings()
+    if photo:
+        await save_group_welcome_settings(enabled, text, None)
+        await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(enabled, False))
+        return await query.answer("Imagem removida.")
+
+    await state.set_state(AdminState.waiting_group_welcome_photo)
+    await query.message.answer("Envie a imagem das boas-vindas como foto.", reply_markup=cancel_keyboard())
+    await query.answer()
+
+
+@router.message(AdminState.waiting_group_welcome_photo, F.photo)
+async def receive_group_welcome_photo(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    enabled, text, _ = await get_group_welcome_settings()
+    error = validate_start_text(text, True)
+    if error:
+        return await message.answer(f"❌ O texto atual não cabe com imagem: {html.escape(error)}", reply_markup=cancel_keyboard())
+    await save_group_welcome_settings(enabled, text, message.photo[-1].file_id)
+    await state.clear()
+    await message.answer("✅ Imagem de boas-vindas salva.", reply_markup=group_welcome_keyboard(enabled, True))
 
 
 @router.callback_query(F.data == "admin:back")
