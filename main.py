@@ -2224,42 +2224,43 @@ async def fetch_chassi_data(api_base_url: str, api_key: str, chassi: str) -> obj
 # Botões e estados do painel
 # -----------------------------------------------------------------------------
 
+def keyboard_rows(buttons: list[InlineKeyboardButton], columns: int = 2) -> list[list[InlineKeyboardButton]]:
+    return [buttons[index:index + columns] for index in range(0, len(buttons), columns)]
+
+
 def main_admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📌 Conteúdo e vitrine", callback_data="admin:section_content")],
             [
-                InlineKeyboardButton(
-                    text="🎨 Personalizar Start",
-                    callback_data="admin:start_menu",
-                )
+                InlineKeyboardButton(text="🎨 Start", callback_data="admin:start_menu"),
+                InlineKeyboardButton(text="🗂 Bases", callback_data="admin:bases"),
             ],
-            [InlineKeyboardButton(text="🗂 Gerenciar Bases", callback_data="admin:bases")],
-            [InlineKeyboardButton(text="🔑 Configurar API", callback_data="admin:api")],
-            [InlineKeyboardButton(text="💳 MisticPay", callback_data="admin:misticpay")],
-            [InlineKeyboardButton(text="📦 Planos e acessos", callback_data="admin:plans")],
+            [InlineKeyboardButton(text="💰 Planos e pagamentos", callback_data="admin:section_sales")],
+            [
+                InlineKeyboardButton(text="📦 Planos", callback_data="admin:plans"),
+                InlineKeyboardButton(text="💳 MisticPay", callback_data="admin:misticpay"),
+            ],
+            [InlineKeyboardButton(text="⚙️ Sistema", callback_data="admin:section_system")],
+            [InlineKeyboardButton(text="🔑 API", callback_data="admin:api")],
         ]
     )
 
 
 def start_keyboard(has_photo: bool) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text="✏️ Editar texto", callback_data="admin:text")],
-        [InlineKeyboardButton(text="🖼 Definir imagem", callback_data="admin:photo")],
-        [InlineKeyboardButton(text="🔘 Editar botões", callback_data="admin:buttons")],
+    action_buttons = [
+        InlineKeyboardButton(text="✏️ Texto", callback_data="admin:text"),
+        InlineKeyboardButton(text="🖼 Imagem", callback_data="admin:photo"),
+        InlineKeyboardButton(text="🔘 Botões", callback_data="admin:buttons"),
+        InlineKeyboardButton(text="👁 Prévia", callback_data="admin:preview"),
+        InlineKeyboardButton(text="❓ HTML", callback_data="admin:help"),
     ]
 
+    buttons = keyboard_rows(action_buttons, 2)
     if has_photo:
-        buttons.append(
-            [InlineKeyboardButton(text="🗑 Remover imagem", callback_data="admin:remove")]
-        )
+        buttons.append([InlineKeyboardButton(text="🗑 Remover imagem", callback_data="admin:remove")])
 
-    buttons.extend(
-        [
-            [InlineKeyboardButton(text="👁 Testar /start", callback_data="admin:preview")],
-            [InlineKeyboardButton(text="❓ Ajuda HTML", callback_data="admin:help")],
-            [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
-        ]
-    )
+    buttons.append([InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -2308,25 +2309,33 @@ def private_result_keyboard(user_id: int, command_message_id: int) -> InlineKeyb
 def api_admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Alterar base", callback_data="admin:api_base")],
-            [InlineKeyboardButton(text="🔐 Alterar key", callback_data="admin:api_key")],
+            [
+                InlineKeyboardButton(text="🌐 Base URL", callback_data="admin:api_base"),
+                InlineKeyboardButton(text="🔐 Key/token", callback_data="admin:api_key"),
+            ],
             [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
-        ]
+        ],
     )
 
 
 def misticpay_admin_keyboard(force_join_enabled: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔑 Alterar URL", callback_data="admin:mp_url")],
-            [InlineKeyboardButton(text="🆔 Alterar Client ID", callback_data="admin:mp_client_id")],
-            [InlineKeyboardButton(text="🧾 Alterar Client Secret", callback_data="admin:mp_client_secret")],
-            [InlineKeyboardButton(text="📣 Canal/grupo obrigatório", callback_data="admin:mp_ref_channel")],
+            [InlineKeyboardButton(text="💳 Gateway de pagamento", callback_data="admin:section_payment")],
+            [
+                InlineKeyboardButton(text="🔑 URL", callback_data="admin:mp_url"),
+                InlineKeyboardButton(text="🆔 Client ID", callback_data="admin:mp_client_id"),
+            ],
+            [InlineKeyboardButton(text="🧾 Client Secret", callback_data="admin:mp_client_secret")],
+            [InlineKeyboardButton(text="📣 Canais e entrada", callback_data="admin:section_channels")],
+            [
+                InlineKeyboardButton(text="📣 Canal/grupo", callback_data="admin:mp_ref_channel"),
+                InlineKeyboardButton(text="📜 Logs", callback_data="admin:mp_logs_channel"),
+            ],
             [InlineKeyboardButton(
                 text=f"{'🟢' if force_join_enabled else '🔴'} Entrada obrigatória",
                 callback_data="admin:force_join_toggle",
             )],
-            [InlineKeyboardButton(text="📜 Canal de logs", callback_data="admin:mp_logs_channel")],
             [InlineKeyboardButton(text="👤 Aviso de novo usuário", callback_data="admin:new_user_reference")],
             [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
         ]
@@ -2342,21 +2351,26 @@ def plans_admin_keyboard(plans: list[tuple[int, str, str, int, float, int]]) -> 
         if not section_plans:
             return
         rows.append([InlineKeyboardButton(text=title, callback_data="admin:plans_header")])
+        plan_buttons = []
         for plan in section_plans:
             status = "🟢" if plan[5] else "🔴"
-            name = plan[1][:28] + ("…" if len(plan[1]) > 28 else "")
-            rows.append([InlineKeyboardButton(
-                text=f"{status} {name} • {plan[3]}d • R$ {plan[4]:.2f}",
+            name = plan[1][:18] + ("…" if len(plan[1]) > 18 else "")
+            plan_buttons.append(InlineKeyboardButton(
+                text=f"{status} {name} • {plan[3]}d",
                 callback_data=f"admin:plan:{plan[0]}",
-            )])
+            ))
+        rows.extend(keyboard_rows(plan_buttons, 2))
 
     add_section("🔐 PLANOS PRIVADOS", private_plans)
     add_section("👥 PLANOS DE GRUPO", group_plans)
     if not plans:
         rows.append([InlineKeyboardButton(text="📭 Nenhum plano cadastrado", callback_data="admin:plans_header")])
     rows.extend([
-        [InlineKeyboardButton(text="➕ Criar planos", callback_data="admin:plan_create")],
-        [InlineKeyboardButton(text="🎯 Liberar acesso manual", callback_data="admin:plan_grant")],
+        [InlineKeyboardButton(text="⚙️ Ações", callback_data="admin:plans_header")],
+        [
+            InlineKeyboardButton(text="➕ Criar", callback_data="admin:plan_create"),
+            InlineKeyboardButton(text="🎯 Liberar", callback_data="admin:plan_grant"),
+        ],
         [InlineKeyboardButton(text="👥 Acessos ativos", callback_data="admin:subscriptions")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
     ])
@@ -2486,13 +2500,16 @@ def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
 
 
 def buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=f"{i + 1}. {button.get('text', 'Botão')}", callback_data=f"admin:button:{i}")]
+    button_rows = keyboard_rows([
+        InlineKeyboardButton(text=f"{i + 1}. {button.get('text', 'Botão')[:16]}", callback_data=f"admin:button:{i}")
         for i, button in enumerate(buttons)
-    ]
+    ], 2)
+    rows = button_rows
     rows.extend([
-        [InlineKeyboardButton(text="▦ Alterar organização", callback_data="admin:layout")],
-        [InlineKeyboardButton(text="👁 Testar /start", callback_data="admin:preview")],
+        [
+            InlineKeyboardButton(text="▦ Organização", callback_data="admin:layout"),
+            InlineKeyboardButton(text="👁 Prévia", callback_data="admin:preview"),
+        ],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:start_menu")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2501,10 +2518,14 @@ def buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
 def button_editor_keyboard(index: int, button: dict) -> InlineKeyboardMarkup:
     colors = {"primary": "azul", "success": "verde", "danger": "vermelho", "": "padrão"}
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Alterar texto", callback_data=f"admin:btext:{index}")],
-        [InlineKeyboardButton(text="🔗 Alterar link", callback_data=f"admin:burl:{index}")],
-        [InlineKeyboardButton(text="✨ Emoji premium", callback_data=f"admin:bemoji:{index}")],
-        [InlineKeyboardButton(text=f"🎨 Cor: {colors.get(button.get('style', ''), 'padrão')}", callback_data=f"admin:bstyle:{index}")],
+        [
+            InlineKeyboardButton(text="✏️ Texto", callback_data=f"admin:btext:{index}"),
+            InlineKeyboardButton(text="🔗 Link", callback_data=f"admin:burl:{index}"),
+        ],
+        [
+            InlineKeyboardButton(text="✨ Emoji", callback_data=f"admin:bemoji:{index}"),
+            InlineKeyboardButton(text=f"🎨 {colors.get(button.get('style', ''), 'padrão')}", callback_data=f"admin:bstyle:{index}"),
+        ],
         [InlineKeyboardButton(text="⬆️ Mover", callback_data=f"admin:bmove:{index}:-1"), InlineKeyboardButton(text="⬇️ Mover", callback_data=f"admin:bmove:{index}:1")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:buttons")],
     ])
@@ -2730,6 +2751,11 @@ async def chat_id_handler(message: Message) -> None:
     schedule_query_cleanup(message, response)
 
 
+@router.callback_query(F.data.startswith("admin:section_"))
+async def admin_section_header_handler(query: CallbackQuery) -> None:
+    await query.answer("Categoria do painel.")
+
+
 @router.callback_query(F.data.startswith("start:button:"))
 async def unconfigured_start_button_handler(query: CallbackQuery) -> None:
     await query.answer("Este botão ainda não tem um link. Configure-o no /admin.", show_alert=True)
@@ -2903,7 +2929,7 @@ async def admin_handler(message: Message, state: FSMContext) -> None:
     _, photo_file_id = await get_settings()
     await message.answer(
         "<b>⚙️ Painel administrativo</b>\n\n"
-        "Escolha uma categoria:",
+        "Escolha uma área para configurar. Os botões estão separados por função:",
         reply_markup=main_admin_keyboard(),
     )
 
@@ -2916,7 +2942,7 @@ async def admin_bases_handler(query: CallbackQuery, state: FSMContext) -> None:
     bases = await get_bases()
     await query.message.edit_text(
         "<b>🗂 Gerenciar Bases</b>\n\n"
-        "Toque em uma base para alternar o status entre online e offline.",
+        "Adicione, edite comandos, URLs e status das bases.",
         reply_markup=bases_admin_keyboard(bases),
     )
     await query.answer()
@@ -3184,7 +3210,7 @@ async def admin_base_back_handler(query: CallbackQuery) -> None:
     if not is_admin(query.from_user.id):
         return await query.answer("Sem permissão.", show_alert=True)
     await query.message.edit_text(
-        "<b>⚙️ Painel administrativo</b>\n\nEscolha uma categoria:",
+        "<b>⚙️ Painel administrativo</b>\n\nEscolha uma área para configurar:",
         reply_markup=main_admin_keyboard(),
     )
     await query.answer()
@@ -3199,7 +3225,7 @@ async def start_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
     _, photo_file_id = await get_settings()
     await query.message.edit_text(
         "<b>🎨 Personalizar Start</b>\n\n"
-        "Gerencie tudo relacionado à mensagem inicial:",
+        "Mensagem inicial, imagem e botões públicos do bot.",
         reply_markup=start_keyboard(bool(photo_file_id)),
     )
     await query.answer()
@@ -3213,7 +3239,7 @@ async def back_handler(query: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await query.message.edit_text(
         "<b>⚙️ Painel administrativo</b>\n\n"
-        "Escolha uma categoria:",
+        "Escolha uma área para configurar:",
         reply_markup=main_admin_keyboard(),
     )
     await query.answer()
@@ -3723,11 +3749,15 @@ async def receive_mp_logs_channel_handler(message: Message, state: FSMContext) -
 def new_user_reference_keyboard(photo_configured: bool, button_color: str) -> InlineKeyboardMarkup:
     photo_label = "🗑 Remover imagem" if photo_configured else "🖼 Definir imagem"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Alterar texto", callback_data="admin:new_user_ref_text")],
-        [InlineKeyboardButton(text=photo_label, callback_data="admin:new_user_ref_photo")],
-        [InlineKeyboardButton(text="🔘 Texto do botão", callback_data="admin:new_user_ref_button_text")],
-        [InlineKeyboardButton(text="🔗 Link do botão", callback_data="admin:new_user_ref_button_url")],
-        [InlineKeyboardButton(text=f"{button_color} Cor do botão", callback_data="admin:new_user_ref_button_color")],
+        [
+            InlineKeyboardButton(text="✏️ Texto", callback_data="admin:new_user_ref_text"),
+            InlineKeyboardButton(text=photo_label, callback_data="admin:new_user_ref_photo"),
+        ],
+        [
+            InlineKeyboardButton(text="🔘 Botão", callback_data="admin:new_user_ref_button_text"),
+            InlineKeyboardButton(text="🔗 Link", callback_data="admin:new_user_ref_button_url"),
+        ],
+        [InlineKeyboardButton(text=f"{button_color} Cor", callback_data="admin:new_user_ref_button_color")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:misticpay")],
     ])
 
