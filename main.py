@@ -1609,6 +1609,9 @@ async def send_pix_result(
 
 def parse_chat_id(text: str) -> str:
     value = text.strip()
+    value = value.removeprefix("https://t.me/").removeprefix("http://t.me/").strip("/")
+    if value and not value.startswith("@") and not value.lstrip("-").isdigit():
+        return f"@{value}"
     if value.startswith("@"):
         return value
     return value
@@ -2282,9 +2285,9 @@ def misticpay_admin_keyboard(force_join_enabled: bool = False) -> InlineKeyboard
             [InlineKeyboardButton(text="🔑 Alterar URL", callback_data="admin:mp_url")],
             [InlineKeyboardButton(text="🆔 Alterar Client ID", callback_data="admin:mp_client_id")],
             [InlineKeyboardButton(text="🧾 Alterar Client Secret", callback_data="admin:mp_client_secret")],
-            [InlineKeyboardButton(text="📣 Canal de referência", callback_data="admin:mp_ref_channel")],
+            [InlineKeyboardButton(text="📣 Canal/grupo obrigatório", callback_data="admin:mp_ref_channel")],
             [InlineKeyboardButton(
-                text=f"{'🟢' if force_join_enabled else '🔴'} Obrigatoriedade de canal",
+                text=f"{'🟢' if force_join_enabled else '🔴'} Entrada obrigatória",
                 callback_data="admin:force_join_toggle",
             )],
             [InlineKeyboardButton(text="📜 Canal de logs", callback_data="admin:mp_logs_channel")],
@@ -2542,8 +2545,8 @@ def is_private_chat(chat) -> bool:
 def required_channel_keyboard(channel: str) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     if channel.startswith("@"):
-        buttons.append([InlineKeyboardButton(text="📢 Entrar no canal", url=f"https://t.me/{channel[1:]}")])
-    buttons.append([InlineKeyboardButton(text="✅ Verificar inscrição", callback_data="required:check")])
+        buttons.append([InlineKeyboardButton(text="📣 Entrar (canal do bot)", url=f"https://t.me/{channel[1:]}")])
+    buttons.append([InlineKeyboardButton(text="✅ Já entrei", callback_data="required:check")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -2569,7 +2572,9 @@ async def enforce_required_channel(message: Message) -> bool:
     if allowed:
         return True
     await message.answer(
-        "📢 Para utilizar o bot, entre primeiro no nosso canal de referência e toque em verificar.",
+        "⚠️ Para usar este bot, você precisa entrar no canal/grupo obrigatório: "
+        f"<b>{html.escape(channel or 'não configurado')}</b>\n\n"
+        "Depois de entrar, toque em <b>Já entrei</b>.",
         reply_markup=required_channel_keyboard(channel),
     )
     return False
@@ -2734,10 +2739,10 @@ async def buy_plan_handler(query: CallbackQuery) -> None:
     allowed, channel = await has_required_channel_access(query.bot, query.from_user.id)
     if not allowed:
         await query.message.answer(
-            "📢 Entre no canal de referência antes de comprar um plano.",
+            "⚠️ Para comprar um plano, entre primeiro no canal/grupo obrigatório e toque em <b>Já entrei</b>.",
             reply_markup=required_channel_keyboard(channel),
         )
-        return await query.answer("Entre no canal obrigatório primeiro.", show_alert=True)
+        return await query.answer("Entre no canal/grupo obrigatório primeiro.", show_alert=True)
     plan = await get_plan(int(query.data.rsplit(":", 1)[1]))
     target_type = "user" if is_private_chat(query.message.chat) else "group"
     target_id = query.from_user.id if target_type == "user" else query.message.chat.id
@@ -3528,10 +3533,10 @@ async def misticpay_menu_handler(query: CallbackQuery, state: FSMContext) -> Non
         f"URL atual: <code>{html.escape(misticpay_url)}</code>\n"
         f"Client ID: <code>{html.escape(client_id or 'não configurado')}</code>\n"
         f"Client Secret: <code>{html.escape('•' * min(len(client_secret), 12) if client_secret else 'não configurado')}</code>\n"
-        f"Canal referência: <code>{html.escape(ref_channel or 'não configurado')}</code>\n"
-        f"Canal obrigatório: <code>{'Ativo' if force_join_enabled else 'Desativado'}</code>\n"
+        f"Canal/grupo obrigatório: <code>{html.escape(ref_channel or 'não configurado')}</code>\n"
+        f"Entrada obrigatória: <code>{'Ativo' if force_join_enabled else 'Desativado'}</code>\n"
         f"Canal logs: <code>{html.escape(logs_channel or 'não configurado')}</code>\n\n"
-        "Configure a gate, os canais e acompanhe as transações.",
+        "Configure pagamentos, canal/grupo obrigatório e acompanhe as transações.",
         reply_markup=misticpay_admin_keyboard(force_join_enabled),
     )
     await query.answer()
@@ -3608,8 +3613,9 @@ async def mp_ref_channel_handler(query: CallbackQuery, state: FSMContext) -> Non
         return await query.answer("Sem permissão.", show_alert=True)
     await state.set_state(AdminState.waiting_reference_channel)
     await query.message.answer(
-        "Envie o canal de referência.\n\nUse <code>@canal</code> ou o ID numérico. "
-        "Para ativar a obrigatoriedade de entrada, use <code>@canal</code> e deixe o bot como admin no canal.",
+        "Envie o canal ou grupo obrigatório.\n\n"
+        "Aceita <code>@canal</code>, <code>https://t.me/canal</code> ou ID numérico.\n"
+        "Para funcionar, deixe o bot como admin no canal/grupo.",
         reply_markup=cancel_keyboard(),
     )
     await query.answer()
@@ -3623,7 +3629,8 @@ async def receive_mp_ref_channel_handler(message: Message, state: FSMContext) ->
     misticpay_url, client_id, client_secret, _, logs_channel = await get_misticpay_settings()
     await save_misticpay_settings(misticpay_url, client_id, client_secret, ref_channel, logs_channel)
     await state.clear()
-    await message.answer("✅ Canal de referência salvo.", reply_markup=misticpay_admin_keyboard())
+    _, enabled = await get_force_join_settings()
+    await message.answer("✅ Canal/grupo obrigatório salvo.", reply_markup=misticpay_admin_keyboard(enabled))
 
 
 @router.callback_query(F.data == "admin:force_join_toggle")
@@ -3632,7 +3639,7 @@ async def force_join_toggle_handler(query: CallbackQuery) -> None:
         return await query.answer("Sem permissão.", show_alert=True)
     channel, enabled = await get_force_join_settings()
     if not channel:
-        return await query.answer("Defina primeiro o canal de referência.", show_alert=True)
+        return await query.answer("Defina primeiro o canal/grupo obrigatório.", show_alert=True)
     await set_force_join_enabled(not enabled)
     misticpay_url, client_id, client_secret, ref_channel, logs_channel = await get_misticpay_settings()
     await query.answer("Obrigatoriedade atualizada.")
@@ -3641,8 +3648,8 @@ async def force_join_toggle_handler(query: CallbackQuery) -> None:
         f"URL atual: <code>{html.escape(misticpay_url)}</code>\n"
         f"Client ID: <code>{html.escape(client_id or 'não configurado')}</code>\n"
         f"Client Secret: <code>{html.escape('•' * min(len(client_secret), 12) if client_secret else 'não configurado')}</code>\n"
-        f"Canal referência: <code>{html.escape(ref_channel or 'não configurado')}</code>\n"
-        f"Canal obrigatório: <code>{'Ativo' if not enabled else 'Desativado'}</code>\n"
+        f"Canal/grupo obrigatório: <code>{html.escape(ref_channel or 'não configurado')}</code>\n"
+        f"Entrada obrigatória: <code>{'Ativo' if not enabled else 'Desativado'}</code>\n"
         f"Canal logs: <code>{html.escape(logs_channel or 'não configurado')}</code>",
         reply_markup=misticpay_admin_keyboard(not enabled),
     )
