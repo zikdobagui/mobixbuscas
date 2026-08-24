@@ -318,6 +318,9 @@ FALLBACK_COMMAND_GROUPS = {
 FALLBACK_TIMEOUT_SECONDS = 12
 
 HIDDEN_RESPONSE_FIELDS = {"status", "resposta", "developer", "developer2", "base64"}
+HIDDEN_RESPONSE_TEXTS = {
+    "api desenvolvida por @astrahvhdev telegram",
+}
 
 BASE_COMMAND_EXAMPLES = {
     "cpf": "cpf",
@@ -883,6 +886,44 @@ def validate_start_text(text: str, has_photo: bool) -> str | None:
     return None
 
 
+def validate_custom_emoji_html(text: str) -> str | None:
+    if "<tg-emoji" not in text.lower():
+        return None
+    stripped = re.sub(
+        r'<tg-emoji\s+emoji-id="\d+">.+?</tg-emoji>',
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if "<tg-emoji" in stripped.lower() or "</tg-emoji>" in stripped.lower():
+        return 'Emoji premium inválido. Use: <tg-emoji emoji-id="ID_NUMERICO">🙂</tg-emoji>'
+    return None
+
+
+def render_custom_emoji_text(text: str) -> str:
+    parts: list[str] = []
+    position = 0
+    pattern = re.compile(
+        r'<tg-emoji\s+emoji-id="\d+">.+?</tg-emoji>',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        parts.append(html.escape(text[position:match.start()]))
+        parts.append(match.group(0))
+        position = match.end()
+    parts.append(html.escape(text[position:]))
+    return "".join(parts)
+
+
+def strip_custom_emoji_tags(text: str) -> str:
+    return re.sub(
+        r'<tg-emoji\s+emoji-id="\d+">(.+?)</tg-emoji>',
+        r"\1",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def normalize_command_name(command: str) -> str:
     return command.strip().lower().lstrip("/")
 
@@ -1065,10 +1106,19 @@ def sanitize_api_result(data: object) -> object:
         for key, value in data.items():
             if key.lower() in HIDDEN_RESPONSE_FIELDS:
                 continue
-            sanitized[key] = sanitize_api_result(value)
+            sanitized_value = sanitize_api_result(value)
+            if sanitized_value is None and isinstance(value, str):
+                continue
+            sanitized[key] = sanitized_value
         return sanitized
     if isinstance(data, list):
-        return [sanitize_api_result(item) for item in data]
+        sanitized_items = [sanitize_api_result(item) for item in data]
+        return [
+            item for original, item in zip(data, sanitized_items)
+            if not (item is None and isinstance(original, str))
+        ]
+    if isinstance(data, str) and data.strip().lower() in HIDDEN_RESPONSE_TEXTS:
+        return None
     return data
 
 
@@ -2284,7 +2334,7 @@ def button_editor_keyboard(index: int, button: dict) -> InlineKeyboardMarkup:
 def bases_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
-            text=f"{base['name']} {'🟢' if base['online'] else '🔴'}",
+            text=f"{strip_custom_emoji_tags(base['name'])} {'🟢' if base['online'] else '🔴'}",
             callback_data=f"bases:category:{index}",
             style="success" if base["online"] else "danger",
         )
@@ -2298,7 +2348,7 @@ def bases_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
 def bases_admin_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
-            text=f"{base['name']} {'🟢' if base['online'] else '🔴'}",
+            text=f"{strip_custom_emoji_tags(base['name'])} {'🟢' if base['online'] else '🔴'}",
             callback_data=f"admin:base:{index}",
             style="success" if base["online"] else "danger",
         )
@@ -2331,7 +2381,7 @@ def render_base_editor_text(base: dict) -> str:
     param = (base.get("param") or (spec or {}).get("param") or "não configurada")
     return (
         "<b>🗂 Editar base</b>\n\n"
-        f"Nome: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"Nome: {render_custom_emoji_text(base.get('name', 'Base'))}\n"
         f"Comando: <code>/{html.escape(command)}</code>\n"
         f"Variável: <code>{html.escape(param)}</code>\n"
         f"Status: <code>{'online' if base.get('online') else 'offline'}</code>\n"
@@ -2767,6 +2817,9 @@ async def receive_base_name_handler(message: Message, state: FSMContext) -> None
     name = message.text.strip()
     if not name:
         return await message.answer("❌ O nome não pode ficar vazio.", reply_markup=cancel_keyboard())
+    emoji_error = validate_custom_emoji_html(name)
+    if emoji_error:
+        return await message.answer(f"❌ {html.escape(emoji_error)}", reply_markup=cancel_keyboard())
     bases[index]["name"] = name
     await save_bases(bases)
     await state.clear()
@@ -2856,7 +2909,7 @@ async def admin_base_url_handler(query: CallbackQuery, state: FSMContext) -> Non
     base = bases[index]
     await query.message.answer(
         "<b>🔗 Alterar URL da base</b>\n\n"
-        f"Base: <code>{html.escape(base.get('name', 'Base'))}</code>\n"
+        f"Base: {render_custom_emoji_text(base.get('name', 'Base'))}\n"
         f"URL atual: <code>{html.escape(base.get('url') or 'não configurada')}</code>\n\n"
         "Envie a nova URL completa ou relativa.\n"
         "Exemplo: <code>https://api.site.com/busca?nome={nome}</code>\n"
@@ -2893,7 +2946,7 @@ async def receive_base_url_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
         "✅ URL da base salva com sucesso.\n\n"
-        f"Base: <code>{html.escape(bases[index].get('name', 'Base'))}</code>\n"
+        f"Base: {render_custom_emoji_text(bases[index].get('name', 'Base'))}\n"
         f"URL: <code>{html.escape(url or 'não configurada')}</code>",
         reply_markup=base_editor_keyboard(index, bases[index]),
     )
@@ -2912,7 +2965,7 @@ async def admin_base_delete_handler(query: CallbackQuery) -> None:
     removed = bases.pop(index)
     await save_bases(bases)
     await query.message.edit_text(
-        f"✅ Base removida: <code>{html.escape(removed.get('name', 'Base'))}</code>\n\n"
+        f"✅ Base removida: {render_custom_emoji_text(removed.get('name', 'Base'))}\n\n"
         "Lista atualizada:",
         reply_markup=bases_admin_keyboard(bases),
     )
