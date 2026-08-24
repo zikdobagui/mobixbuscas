@@ -2211,7 +2211,6 @@ class AdminState(StatesGroup):
     waiting_button_emoji = State()
     waiting_api_base = State()
     waiting_api_key = State()
-    waiting_base_create = State()
     waiting_base_name = State()
     waiting_base_command = State()
     waiting_base_param = State()
@@ -2671,65 +2670,27 @@ async def admin_base_add_handler(query: CallbackQuery, state: FSMContext) -> Non
     if not is_admin(query.from_user.id):
         return await query.answer("Sem permissão.", show_alert=True)
 
-    await state.set_state(AdminState.waiting_base_create)
-    await query.message.answer(
-        "<b>➕ Adicionar base</b>\n\n"
-        "Envie em 4 linhas:\n"
-        "<code>Nome da base</code>\n"
-        "<code>comando</code>\n"
-        "<code>variavel</code>\n"
-        "<code>URL</code>\n\n"
-        "Exemplo:\n"
-        "<code>Consulta Nome Vip</code>\n"
-        "<code>nomevip</code>\n"
-        "<code>nome</code>\n"
-        "<code>https://api.site.com/busca?nome={nome}</code>",
-        reply_markup=cancel_keyboard(),
-    )
-    await query.answer()
-
-
-@router.message(AdminState.waiting_base_create, F.text)
-async def receive_base_create_handler(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
-        return
-
-    lines = [line.strip() for line in message.text.splitlines() if line.strip()]
-    if len(lines) < 4:
-        return await message.answer(
-            "❌ Envie 4 linhas: nome, comando, variável e URL.",
-            reply_markup=cancel_keyboard(),
-        )
-
-    name, command, param, url = lines[0], normalize_command_name(lines[1]), lines[2], lines[3]
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{1,31}$", command):
-        return await message.answer(
-            "❌ O comando deve começar com letra ou _ e ter apenas letras, números ou _.",
-            reply_markup=cancel_keyboard(),
-        )
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", param):
-        return await message.answer(
-            "❌ A variável deve ter apenas letras, números, _ ou -, e começar com letra ou _.",
-            reply_markup=cancel_keyboard(),
-        )
-    if not (re.match(r"^https?://", url, re.IGNORECASE) or re.match(r"^[^\s]+$", url)):
-        return await message.answer("❌ Envie uma URL completa ou rota relativa sem espaços.", reply_markup=cancel_keyboard())
-
     bases = await get_bases()
-    if any(extract_command_name_from_base(base) == command for base in bases):
-        return await message.answer("❌ Já existe uma base usando esse comando.", reply_markup=cancel_keyboard())
-
+    next_number = len(bases) + 1
+    while any(extract_command_name_from_base(base) == f"base{next_number}" for base in bases):
+        next_number += 1
     bases.append({
-        "name": name,
-        "online": True,
-        "url": url,
-        "command": command,
-        "param": param,
+        "name": f"Nova base {next_number}",
+        "online": False,
+        "url": "",
+        "command": f"base{next_number}",
+        "param": "valor",
         "example": "VALOR",
     })
     await save_bases(bases)
+    index = len(bases) - 1
     await state.clear()
-    await message.answer("✅ Base adicionada com sucesso.", reply_markup=bases_admin_keyboard(bases))
+    await query.message.edit_text(
+        "✅ Base criada. Agora escolha nos botões o que deseja alterar.\n\n"
+        f"{render_base_editor_text(bases[index])}",
+        reply_markup=base_editor_keyboard(index, bases[index]),
+    )
+    await query.answer("Base criada.")
 
 
 @router.callback_query(F.data.regexp(r"^admin:base:\d+$"))
@@ -2790,7 +2751,7 @@ async def admin_base_name_handler(query: CallbackQuery, state: FSMContext) -> No
     if not is_admin(query.from_user.id):
         return await query.answer("Sem permissão.", show_alert=True)
     index = int(query.data.rsplit(":", 1)[1])
-    await ask_base_field(query, state, index, "name", "Envie o novo nome da base.")
+    await ask_base_field(query, state, index, "name", "Envie apenas o novo nome da base.")
 
 
 @router.message(AdminState.waiting_base_name, F.text)
@@ -2822,7 +2783,7 @@ async def admin_base_command_handler(query: CallbackQuery, state: FSMContext) ->
         state,
         index,
         "command",
-        "Envie o novo comando sem barra.\n\nExemplo: <code>nomevip</code>",
+        "Envie apenas o novo comando, sem barra.\n\nExemplo: <code>nomevip</code>",
     )
 
 
@@ -2857,7 +2818,7 @@ async def admin_base_param_handler(query: CallbackQuery, state: FSMContext) -> N
         state,
         index,
         "param",
-        "Envie o nome da variável/parâmetro.\n\nExemplo: <code>nome</code>, <code>cpf</code>, <code>placa</code>",
+        "Envie apenas o nome da variável/parâmetro.\n\nExemplo: <code>nome</code>, <code>cpf</code>, <code>placa</code>",
     )
 
 
