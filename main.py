@@ -924,6 +924,39 @@ def strip_custom_emoji_tags(text: str) -> str:
     )
 
 
+def utf16_index_to_py_index(text: str, utf16_index: int) -> int:
+    units = 0
+    for index, char in enumerate(text):
+        if units >= utf16_index:
+            return index
+        units += len(char.encode("utf-16-le")) // 2
+    return len(text)
+
+
+def text_with_custom_emoji_tags(message: Message) -> str:
+    text = message.text or ""
+    entities = [
+        entity for entity in (message.entities or [])
+        if str(entity.type).lower().endswith("custom_emoji") and entity.custom_emoji_id
+    ]
+    if not entities:
+        return text
+
+    pieces: list[str] = []
+    position = 0
+    for entity in sorted(entities, key=lambda item: item.offset):
+        start = utf16_index_to_py_index(text, entity.offset)
+        end = utf16_index_to_py_index(text, entity.offset + entity.length)
+        if start < position:
+            continue
+        emoji_text = text[start:end]
+        pieces.append(text[position:start])
+        pieces.append(f'<tg-emoji emoji-id="{entity.custom_emoji_id}">{emoji_text}</tg-emoji>')
+        position = end
+    pieces.append(text[position:])
+    return "".join(pieces)
+
+
 def normalize_command_name(command: str) -> str:
     return command.strip().lower().lstrip("/")
 
@@ -2814,7 +2847,7 @@ async def receive_base_name_handler(message: Message, state: FSMContext) -> None
     if not 0 <= index < len(bases):
         await state.clear()
         return await message.answer("❌ Base não encontrada.")
-    name = message.text.strip()
+    name = text_with_custom_emoji_tags(message).strip()
     if not name:
         return await message.answer("❌ O nome não pode ficar vazio.", reply_markup=cancel_keyboard())
     emoji_error = validate_custom_emoji_html(name)
