@@ -39,6 +39,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 web_app = FastAPI()
+LAST_BOT_MESSAGE_BY_CHAT: dict[int, int] = {}
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS_TEXT = os.getenv("ADMIN_IDS", "").strip()
@@ -2510,14 +2511,29 @@ async def delete_command_message_now(message: Message) -> None:
         pass
 
 
+async def delete_last_bot_message(bot: Bot, chat_id: int) -> None:
+    message_id = LAST_BOT_MESSAGE_BY_CHAT.pop(chat_id, None)
+    if not message_id:
+        return
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except TelegramBadRequest:
+        pass
+
+
+def remember_last_bot_message(message: Message) -> None:
+    LAST_BOT_MESSAGE_BY_CHAT[message.chat.id] = message.message_id
+
+
 async def send_start(bot: Bot, chat_id: int, user) -> None:
     text, photo_file_id = await get_settings()
     buttons = await get_buttons()
     rendered = render_variables(text, user)
     reply_markup = public_buttons_keyboard(buttons)
 
+    await delete_last_bot_message(bot, chat_id)
     if photo_file_id:
-        await bot.send_photo(
+        sent_message = await bot.send_photo(
             chat_id=chat_id,
             photo=photo_file_id,
             caption=rendered,
@@ -2525,17 +2541,19 @@ async def send_start(bot: Bot, chat_id: int, user) -> None:
             reply_markup=reply_markup,
         )
     else:
-        await bot.send_message(
+        sent_message = await bot.send_message(
             chat_id=chat_id,
             text=rendered,
             parse_mode=ParseMode.HTML,
             reply_markup=reply_markup,
         )
+    remember_last_bot_message(sent_message)
 
 
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
     is_new_user = await register_user(message)
+    await delete_command_message_now(message)
     if is_new_user:
         await notify_new_user_reference(message.bot, message.from_user)
     parts = (message.text or "").split(maxsplit=1)
@@ -3888,6 +3906,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
         await message.answer("A key da API ainda não foi configurada no /admin.")
         return
 
+    await delete_last_bot_message(message.bot, message.chat.id)
     status_message = await message.answer("⏳ Processando sua consulta...")
     schedule_query_cleanup(message, status_message)
     try:
@@ -3915,12 +3934,14 @@ async def dynamic_api_command_handler(message: Message) -> None:
                 ),
                 reply_markup=result_keyboard(message.from_user.id, message.message_id),
             )
+            remember_last_bot_message(status_message)
             return
         await send_error_log(message.bot, message, command_name, error.code, parsed_body)
         await status_message.edit_text(
             render_api_failure(spec["title"], error.code, message.from_user, bot_me.username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
+        remember_last_bot_message(status_message)
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         await send_error_log(message.bot, message, command_name, 503, error)
@@ -3928,6 +3949,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
             render_api_failure(spec["title"], 503, message.from_user, (await message.bot.get_me()).username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
+        remember_last_bot_message(status_message)
         return
 
     bot_me = await message.bot.get_me()
@@ -3944,6 +3966,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
         bot_me.username or "",
         delivery_only=bool(WEB_RESULTS_URL),
     )
+    remember_last_bot_message(result_message)
     schedule_query_cleanup(message, result_message)
 
 
@@ -3969,6 +3992,7 @@ async def chassi_handler(message: Message) -> None:
         await message.answer("A key da API ainda não foi configurada no /admin.")
         return
 
+    await delete_last_bot_message(message.bot, message.chat.id)
     status_message = await message.answer("⏳ Processando sua consulta...")
     schedule_query_cleanup(message, status_message)
     try:
@@ -3989,12 +4013,14 @@ async def chassi_handler(message: Message) -> None:
                 ),
                 reply_markup=result_keyboard(message.from_user.id, message.message_id),
             )
+            remember_last_bot_message(status_message)
             return
         await send_error_log(message.bot, message, "chassi", error.code, parsed_body)
         await status_message.edit_text(
             render_api_failure("Resultado do chassi", error.code, message.from_user, bot_me.username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
+        remember_last_bot_message(status_message)
         return
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         await send_error_log(message.bot, message, "chassi", 503, error)
@@ -4002,6 +4028,7 @@ async def chassi_handler(message: Message) -> None:
             render_api_failure("Resultado do chassi", 503, message.from_user, (await message.bot.get_me()).username or ""),
             reply_markup=result_keyboard(message.from_user.id, message.message_id),
         )
+        remember_last_bot_message(status_message)
         return
 
     bot_me = await message.bot.get_me()
@@ -4018,6 +4045,7 @@ async def chassi_handler(message: Message) -> None:
         bot_me.username or "",
         delivery_only=bool(WEB_RESULTS_URL),
     )
+    remember_last_bot_message(result_message)
     schedule_query_cleanup(message, result_message)
 
 
