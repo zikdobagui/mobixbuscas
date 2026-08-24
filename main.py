@@ -321,6 +321,9 @@ HIDDEN_RESPONSE_FIELDS = {"status", "resposta", "developer", "developer2", "base
 HIDDEN_RESPONSE_TEXTS = {
     "api desenvolvida por @astrahvhdev telegram",
 }
+HIDDEN_RESPONSE_PATTERNS = [
+    re.compile(r"api\s+desenvolvida\s+por\s+@astrahvhdev\s+telegram", re.IGNORECASE),
+]
 
 BASE_COMMAND_EXAMPLES = {
     "cpf": "cpf",
@@ -1150,9 +1153,19 @@ def sanitize_api_result(data: object) -> object:
             item for original, item in zip(data, sanitized_items)
             if not (item is None and isinstance(original, str))
         ]
-    if isinstance(data, str) and data.strip().lower() in HIDDEN_RESPONSE_TEXTS:
-        return None
+    if isinstance(data, str):
+        cleaned = clean_hidden_response_text(data).strip()
+        if not cleaned or cleaned.lower() in HIDDEN_RESPONSE_TEXTS:
+            return None
+        return cleaned
     return data
+
+
+def clean_hidden_response_text(text: str) -> str:
+    cleaned = text
+    for pattern in HIDDEN_RESPONSE_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    return cleaned
 
 
 def extract_base64_photo(data: object) -> bytes | None:
@@ -1187,7 +1200,7 @@ def is_html_error_response(data: object) -> bool:
 
 def parse_api_response(body: str) -> object:
     """Aceita JSON normal e o formato incompleto retornado por algumas bases."""
-    normalized = body.lstrip("\ufeff \t\r\n")
+    normalized = clean_hidden_response_text(body).lstrip("\ufeff \t\r\n")
     try:
         return json.loads(normalized)
     except json.JSONDecodeError:
@@ -1201,6 +1214,7 @@ def parse_api_response(body: str) -> object:
 
 
 def parse_api_error_body(body: str) -> object:
+    body = clean_hidden_response_text(body)
     try:
         return json.loads(body)
     except json.JSONDecodeError:
