@@ -2501,6 +2501,15 @@ def schedule_query_cleanup(message: Message, response_message: Message, delay: i
     asyncio.create_task(delete_messages_later(message.bot, message.chat.id, [message.message_id, response_message.message_id], delay))
 
 
+async def delete_command_message_now(message: Message) -> None:
+    if is_private_chat(message.chat):
+        return
+    try:
+        await message.bot.delete_message(message.chat.id, message.message_id)
+    except TelegramBadRequest:
+        pass
+
+
 async def send_start(bot: Bot, chat_id: int, user) -> None:
     text, photo_file_id = await get_settings()
     buttons = await get_buttons()
@@ -3848,6 +3857,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
     spec = await get_command_spec(command_name)
     if not spec:
         return
+    await delete_command_message_now(message)
 
     if not await enforce_required_channel(message):
         return
@@ -3939,6 +3949,7 @@ async def dynamic_api_command_handler(message: Message) -> None:
 
 @router.message(Command("chassi"))
 async def chassi_handler(message: Message) -> None:
+    await delete_command_message_now(message)
     if not await enforce_required_channel(message):
         return
     if not await has_active_access(message.chat.id, message.from_user.id, is_private_chat(message.chat)):
