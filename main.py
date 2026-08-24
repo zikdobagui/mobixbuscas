@@ -973,7 +973,7 @@ def render_group_welcome(template: str, user, chat) -> str:
         "{GRUPO}": html.escape(getattr(chat, "title", "") or "grupo"),
     }
     for key, value in values.items():
-        template = template.replace(key, value)
+        template = re.sub(re.escape(key), value, template, flags=re.IGNORECASE)
     return template
 
 
@@ -2934,6 +2934,18 @@ async def group_new_members_handler(message: Message) -> None:
             logger.exception("Falha ao enviar boas-vindas no chat %s", message.chat.id)
     if newest_welcome_message_id:
         await save_group_welcome_settings(message.chat.id, enabled, text, photo, delete_previous, newest_welcome_message_id)
+
+
+@router.message(F.left_chat_member)
+async def group_left_member_handler(message: Message) -> None:
+    enabled, *_ = await get_group_welcome_settings(message.chat.id)
+    if not enabled:
+        return
+
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data == "required:check")
