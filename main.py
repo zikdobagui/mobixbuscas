@@ -1862,6 +1862,35 @@ async def has_active_access(chat_id: int, user_id: int, private_chat: bool) -> b
         return await cursor.fetchone() is not None
 
 
+async def bot_start_url(bot: Bot) -> str:
+    global BOT_USERNAME
+    if not BOT_USERNAME:
+        try:
+            bot_me = await bot.get_me()
+            BOT_USERNAME = bot_me.username or ""
+        except TelegramBadRequest:
+            BOT_USERNAME = ""
+    return f"https://t.me/{BOT_USERNAME}?start=start" if BOT_USERNAME else WEB_RESULTS_URL
+
+
+async def inactive_access_keyboard(bot: Bot) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✨ Saiba Mais", url=await bot_start_url(bot))
+    ]])
+
+
+async def send_inactive_access_message(message: Message, command_name: str) -> Message:
+    sent_message = await message.answer(
+        f"<b>Olá, {html.escape(message.from_user.first_name or 'usuário')}!</b> "
+        f"O módulo <b>{html.escape(command_name.upper())}</b> está disponível exclusivamente "
+        "para assinantes do nosso plano privado.\n\n"
+        "<b>Quer saber mais?</b> Clique abaixo para descobrir todos os benefícios:",
+        reply_markup=await inactive_access_keyboard(message.bot),
+    )
+    remember_last_bot_message(sent_message)
+    return sent_message
+
+
 async def notify_payment_channels(bot: Bot, text: str) -> None:
     _, _, _, ref_channel, logs_channel = await get_misticpay_settings()
     for channel in (ref_channel, logs_channel):
@@ -3938,10 +3967,8 @@ async def dynamic_api_command_handler(message: Message) -> None:
         return
 
     if not await has_active_access(message.chat.id, message.from_user.id, is_private_chat(message.chat)):
-        await message.answer(
-            "⏳ Seu plano expirou ou este chat não possui um plano ativo.\n\n"
-            "Use o botão <b>Planos</b> no /start para comprar ou renovar o acesso."
-        )
+        await delete_last_bot_message(message.bot, message.chat.id)
+        await send_inactive_access_message(message, command_name)
         return
 
     if len(parts) < 2 or not parts[1].strip():
@@ -4033,10 +4060,8 @@ async def chassi_handler(message: Message) -> None:
     if not await enforce_required_channel(message):
         return
     if not await has_active_access(message.chat.id, message.from_user.id, is_private_chat(message.chat)):
-        await message.answer(
-            "⏳ Seu plano expirou ou este chat não possui um plano ativo.\n\n"
-            "Use o botão <b>Planos</b> no /start para comprar ou renovar o acesso."
-        )
+        await delete_last_bot_message(message.bot, message.chat.id)
+        await send_inactive_access_message(message, "chassi")
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
