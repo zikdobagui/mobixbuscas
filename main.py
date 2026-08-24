@@ -25,6 +25,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -2384,15 +2385,16 @@ def public_buttons_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
         for index, button in enumerate(buttons):
             if int(button.get("row", 0)) != row_number:
                 continue
+            is_bases_webapp = button.get("action") == "bases" and bool(WEB_RESULTS_URL)
             data = {
                 "text": format_button_text(button.get("text", "Botão")),
                 "url": (
-                    f"{WEB_RESULTS_URL}/bases" if button.get("action") == "bases" and WEB_RESULTS_URL
-                    else button.get("url") or None
+                    None if is_bases_webapp else button.get("url") or None
                 ),
+                "web_app": WebAppInfo(url=f"{WEB_RESULTS_URL}/bases") if is_bases_webapp else None,
                 "callback_data": (
                     None if button.get("url") else
-                    None if button.get("action") == "bases" and WEB_RESULTS_URL else
+                    None if is_bases_webapp else
                     "start:bases" if button.get("action") == "bases" else
                     "start:plans" if button.get("action") == "plans" else f"start:button:{index}"
                 ),
