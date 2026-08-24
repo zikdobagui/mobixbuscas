@@ -570,10 +570,17 @@ async def setup_database() -> None:
                 enabled INTEGER NOT NULL DEFAULT 0,
                 text TEXT NOT NULL,
                 photo_file_id TEXT,
+                delete_previous INTEGER NOT NULL DEFAULT 0,
+                last_message_id INTEGER,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        welcome_columns = {row[1] for row in await (await database.execute("PRAGMA table_info(group_welcome_configs)")).fetchall()}
+        if "delete_previous" not in welcome_columns:
+            await database.execute("ALTER TABLE group_welcome_configs ADD COLUMN delete_previous INTEGER NOT NULL DEFAULT 0")
+        if "last_message_id" not in welcome_columns:
+            await database.execute("ALTER TABLE group_welcome_configs ADD COLUMN last_message_id INTEGER")
         delivery_columns = {row[1] for row in await (await database.execute("PRAGMA table_info(result_deliveries)")).fetchall()}
         if "image_base64" not in delivery_columns:
             await database.execute("ALTER TABLE result_deliveries ADD COLUMN image_base64 TEXT")
@@ -677,31 +684,42 @@ async def save_new_user_reference_settings(
         await database.commit()
 
 
-async def get_group_welcome_settings(chat_id: int) -> tuple[bool, str, str | None]:
+async def get_group_welcome_settings(chat_id: int) -> tuple[bool, str, str | None, bool, int | None]:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
-            "SELECT enabled, text, photo_file_id FROM group_welcome_configs WHERE chat_id = ?",
+            "SELECT enabled, text, photo_file_id, delete_previous, last_message_id FROM group_welcome_configs WHERE chat_id = ?",
             (chat_id,),
         )
         row = await cursor.fetchone()
     if not row:
-        return False, DEFAULT_GROUP_WELCOME_TEXT, None
-    return bool(row[0]), row[1] or DEFAULT_GROUP_WELCOME_TEXT, row[2]
+        return False, DEFAULT_GROUP_WELCOME_TEXT, None, False, None
+    return bool(row[0]), row[1] or DEFAULT_GROUP_WELCOME_TEXT, row[2], bool(row[3]), row[4]
 
 
-async def save_group_welcome_settings(chat_id: int, enabled: bool, text: str, photo_file_id: str | None) -> None:
+async def save_group_welcome_settings(
+    chat_id: int,
+    enabled: bool,
+    text: str,
+    photo_file_id: str | None,
+    delete_previous: bool,
+    last_message_id: int | None = None,
+) -> None:
     async with aiosqlite.connect(DB_PATH) as database:
         await database.execute(
             """
-            INSERT INTO group_welcome_configs (chat_id, enabled, text, photo_file_id, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO group_welcome_configs (
+                chat_id, enabled, text, photo_file_id, delete_previous, last_message_id, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(chat_id) DO UPDATE SET
                 enabled = excluded.enabled,
                 text = excluded.text,
                 photo_file_id = excluded.photo_file_id,
+                delete_previous = excluded.delete_previous,
+                last_message_id = excluded.last_message_id,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (chat_id, int(enabled), text, photo_file_id),
+            (chat_id, int(enabled), text, photo_file_id, int(delete_previous), last_message_id),
         )
         await database.commit()
 
@@ -2646,11 +2664,15 @@ def bases_keyboard(bases: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def group_welcome_keyboard(chat_id: int, enabled: bool, photo_configured: bool) -> InlineKeyboardMarkup:
+def group_welcome_keyboard(chat_id: int, enabled: bool, photo_configured: bool, delete_previous: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🔴 Desativar" if enabled else "🟢 Ativar",
             callback_data=f"admin:welcome_toggle:{chat_id}",
+        )],
+        [InlineKeyboardButton(
+            text="🧹 Apagar anterior" if delete_previous else "📝 Sempre nova",
+            callback_data=f"admin:welcome_delete_previous:{chat_id}",
         )],
         [
             InlineKeyboardButton(text="✏️ Texto", callback_data=f"admin:welcome_text:{chat_id}"),
@@ -2882,7 +2904,7 @@ async def unconfigured_start_button_handler(query: CallbackQuery) -> None:
 
 @router.message(F.new_chat_members)
 async def group_new_members_handler(message: Message) -> None:
-    enabled, text, photo = await get_group_welcome_settings(message.chat.id)
+    enabled, text, photo, delete_previous, last_message_id = await get_group_welcome_settings(message.chat.id)
     if not enabled:
         return
 
@@ -2891,17 +2913,27 @@ async def group_new_members_handler(message: Message) -> None:
     except TelegramBadRequest:
         pass
 
+    if delete_previous and last_message_id:
+        try:
+            await message.bot.delete_message(message.chat.id, last_message_id)
+        except TelegramBadRequest:
+            pass
+
+    newest_welcome_message_id: int | None = None
     for user in message.new_chat_members:
         if getattr(user, "is_bot", False):
             continue
         rendered = render_group_welcome(text, user, message.chat)
         try:
             if photo:
-                await message.answer_photo(photo, caption=rendered, parse_mode=ParseMode.HTML)
+                sent_message = await message.answer_photo(photo, caption=rendered, parse_mode=ParseMode.HTML)
             else:
-                await message.answer(rendered, parse_mode=ParseMode.HTML)
+                sent_message = await message.answer(rendered, parse_mode=ParseMode.HTML)
+            newest_welcome_message_id = sent_message.message_id
         except TelegramBadRequest:
             logger.exception("Falha ao enviar boas-vindas no chat %s", message.chat.id)
+    if newest_welcome_message_id:
+        await save_group_welcome_settings(message.chat.id, enabled, text, photo, delete_previous, newest_welcome_message_id)
 
 
 @router.callback_query(F.data == "required:check")
@@ -3444,16 +3476,17 @@ async def group_welcome_menu_handler(query: CallbackQuery, state: FSMContext) ->
 
 
 async def send_group_welcome_editor(target, chat_id: int) -> None:
-    enabled, text, photo = await get_group_welcome_settings(chat_id)
+    enabled, text, photo, delete_previous, _ = await get_group_welcome_settings(chat_id)
     await target.answer(
         "<b>👋 Boas-vindas do grupo</b>\n\n"
         f"Grupo ID: <code>{chat_id}</code>\n"
         f"Status: <code>{'Ativo' if enabled else 'Desativado'}</code>\n"
         f"Imagem: <code>{'configurada' if photo else 'não configurada'}</code>\n\n"
+        f"Modo: <code>{'apaga a saudação anterior' if delete_previous else 'sempre envia uma nova'}</code>\n\n"
         "Essa configuração vale apenas para este grupo.\n"
         "Variáveis: <code>{MENTION}</code>, <code>{NAME}</code>, <code>{USERNAME}</code>, "
         "<code>{ID}</code>, <code>{CHAT_TITLE}</code>, <code>{GRUPO}</code>.",
-        reply_markup=group_welcome_keyboard(chat_id, enabled, bool(photo)),
+        reply_markup=group_welcome_keyboard(chat_id, enabled, bool(photo), delete_previous),
     )
 
 
@@ -3475,10 +3508,24 @@ async def group_welcome_toggle_handler(query: CallbackQuery) -> None:
         return await query.answer("Sem permissão.", show_alert=True)
 
     chat_id = int(query.data.rsplit(":", 1)[1])
-    enabled, text, photo = await get_group_welcome_settings(chat_id)
-    await save_group_welcome_settings(chat_id, not enabled, text, photo)
-    await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(chat_id, not enabled, bool(photo)))
+    enabled, text, photo, delete_previous, last_message_id = await get_group_welcome_settings(chat_id)
+    await save_group_welcome_settings(chat_id, not enabled, text, photo, delete_previous, last_message_id)
+    await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(chat_id, not enabled, bool(photo), delete_previous))
     await query.answer("Boas-vindas atualizadas.")
+
+
+@router.callback_query(F.data.startswith("admin:welcome_delete_previous:"))
+async def group_welcome_delete_previous_handler(query: CallbackQuery) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissão.", show_alert=True)
+
+    chat_id = int(query.data.rsplit(":", 1)[1])
+    enabled, text, photo, delete_previous, last_message_id = await get_group_welcome_settings(chat_id)
+    await save_group_welcome_settings(chat_id, enabled, text, photo, not delete_previous, last_message_id)
+    await query.message.edit_reply_markup(
+        reply_markup=group_welcome_keyboard(chat_id, enabled, bool(photo), not delete_previous)
+    )
+    await query.answer("Modo das boas-vindas atualizado.")
 
 
 @router.callback_query(F.data.startswith("admin:welcome_text:"))
@@ -3508,13 +3555,13 @@ async def receive_group_welcome_text(message: Message, state: FSMContext) -> Non
     if not chat_id:
         await state.clear()
         return await message.answer("❌ Escolha o grupo novamente pelo painel de boas-vindas.")
-    enabled, _, photo = await get_group_welcome_settings(chat_id)
+    enabled, _, photo, delete_previous, last_message_id = await get_group_welcome_settings(chat_id)
     error = validate_start_text(message.text, bool(photo))
     if error:
         return await message.answer(f"❌ {html.escape(error)}", reply_markup=cancel_keyboard())
-    await save_group_welcome_settings(chat_id, enabled, message.text, photo)
+    await save_group_welcome_settings(chat_id, enabled, message.text, photo, delete_previous, last_message_id)
     await state.clear()
-    await message.answer("✅ Texto de boas-vindas salvo.", reply_markup=group_welcome_keyboard(chat_id, enabled, bool(photo)))
+    await message.answer("✅ Texto de boas-vindas salvo.", reply_markup=group_welcome_keyboard(chat_id, enabled, bool(photo), delete_previous))
 
 
 @router.callback_query(F.data.startswith("admin:welcome_photo:"))
@@ -3523,10 +3570,10 @@ async def group_welcome_photo_handler(query: CallbackQuery, state: FSMContext) -
         return await query.answer("Sem permissão.", show_alert=True)
 
     chat_id = int(query.data.rsplit(":", 1)[1])
-    enabled, text, photo = await get_group_welcome_settings(chat_id)
+    enabled, text, photo, delete_previous, last_message_id = await get_group_welcome_settings(chat_id)
     if photo:
-        await save_group_welcome_settings(chat_id, enabled, text, None)
-        await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(chat_id, enabled, False))
+        await save_group_welcome_settings(chat_id, enabled, text, None, delete_previous, last_message_id)
+        await query.message.edit_reply_markup(reply_markup=group_welcome_keyboard(chat_id, enabled, False, delete_previous))
         return await query.answer("Imagem removida.")
 
     await state.update_data(group_welcome_chat_id=chat_id)
@@ -3545,13 +3592,13 @@ async def receive_group_welcome_photo(message: Message, state: FSMContext) -> No
     if not chat_id:
         await state.clear()
         return await message.answer("❌ Escolha o grupo novamente pelo painel de boas-vindas.")
-    enabled, text, _ = await get_group_welcome_settings(chat_id)
+    enabled, text, _, delete_previous, last_message_id = await get_group_welcome_settings(chat_id)
     error = validate_start_text(text, True)
     if error:
         return await message.answer(f"❌ O texto atual não cabe com imagem: {html.escape(error)}", reply_markup=cancel_keyboard())
-    await save_group_welcome_settings(chat_id, enabled, text, message.photo[-1].file_id)
+    await save_group_welcome_settings(chat_id, enabled, text, message.photo[-1].file_id, delete_previous, last_message_id)
     await state.clear()
-    await message.answer("✅ Imagem de boas-vindas salva.", reply_markup=group_welcome_keyboard(chat_id, enabled, True))
+    await message.answer("✅ Imagem de boas-vindas salva.", reply_markup=group_welcome_keyboard(chat_id, enabled, True, delete_previous))
 
 
 @router.callback_query(F.data == "admin:back")
