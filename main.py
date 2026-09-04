@@ -1618,8 +1618,8 @@ async def web_plans_page() -> str:
 const grid=document.querySelector('#grid'),empty=document.querySelector('#empty'),brand=document.querySelector('#brand'),openBot=document.querySelector('#openBot');let plans=[],active='user',botUser='';
 const esc=s=>String(s||'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 const money=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-function botUrl(){return botUser?`https://t.me/${encodeURIComponent(botUser)}?start=start`:'#'}
-function render(){const items=plans.filter(p=>p.category===active);empty.style.display=items.length?'none':'block';grid.innerHTML=items.map(p=>`<article class="plan"><span class="badge">${active==='user'?'Privado':'Grupo'}</span><h2>${esc(p.name)}</h2><p class="price"><strong>${money(p.price)}</strong><span>/${p.duration_days} dias</span></p><div class="meta"><div>⏱ ${p.duration_days} dias de acesso</div><div>${active==='user'?'👤 Uso no privado':'👥 Liberação para grupo'}</div></div><p class="hint">${active==='user'?'Ideal para consultar direto no privado com mais privacidade.':'Ideal para liberar comandos em um grupo inteiro.'}</p><a class="primary" href="${botUrl()}" target="_blank" rel="noopener">↗ Comprar no Bot</a></article>`).join('')}
+function botUrl(plan){const start=plan?`buy_${plan.id}`:'start';return botUser?`https://t.me/${encodeURIComponent(botUser)}?start=${encodeURIComponent(start)}`:'#'}
+function render(){const items=plans.filter(p=>p.category===active);empty.style.display=items.length?'none':'block';grid.innerHTML=items.map(p=>`<article class="plan"><span class="badge">${active==='user'?'Privado':'Grupo'}</span><h2>${esc(p.name)}</h2><p class="price"><strong>${money(p.price)}</strong><span>/${p.duration_days} dias</span></p><div class="meta"><div>⏱ ${p.duration_days} dias de acesso</div><div>${active==='user'?'👤 Uso no privado':'👥 Liberação para grupo'}</div></div><p class="hint">${active==='user'?'Ideal para consultar direto no privado com mais privacidade.':'Ideal para liberar comandos em um grupo inteiro.'}</p><a class="primary" href="${botUrl(p)}" target="_blank" rel="noopener">↗ Comprar no Bot</a></article>`).join('')}
 document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{active=btn.dataset.cat;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b===btn));render()}));
 fetch('/api/planos').then(r=>r.json()).then(data=>{plans=data.plans||[];botUser=data.bot_username||'';const name=data.bot_name||'MOBIX BUSCAS';const parts=name.split(/\\s+/);brand.innerHTML=`${esc(parts[0]||name)} <span>${esc(parts.slice(1).join(' ')||'BOT')}</span>`;openBot.href=botUrl();render()}).catch(()=>{empty.textContent='Não foi possível carregar os planos.';empty.style.display='block'});
 </script></body></html>"""
@@ -2896,6 +2896,96 @@ async def send_start(bot: Bot, chat_id: int, user) -> None:
     remember_last_bot_message(sent_message)
 
 
+async def create_plan_payment(
+    bot: Bot,
+    source_message: Message,
+    user,
+    plan_id: int,
+    target_type: str,
+    target_id: int,
+) -> bool:
+    plan = await get_plan(plan_id)
+    if not plan or not plan[5] or plan[2] != target_type:
+        await source_message.answer("❌ Este plano não está disponível.")
+        return False
+
+    plan_id, plan_name, _, duration_days, price, _ = plan
+    misticpay_url, client_id, client_secret, _, _ = await get_misticpay_settings()
+    if not client_id or not client_secret:
+        await source_message.answer("❌ Os pagamentos ainda não foram configurados.")
+        return False
+
+    status_message = await source_message.answer("⏳ Criando PIX do seu plano...")
+    transaction_id = uuid.uuid4().hex[:12]
+    payer_name = user.full_name or user.first_name or "usuario"
+    description = f"Plano {plan_name} - {duration_days} dias"
+    try:
+        data = await request_misticpay_json(
+            misticpay_url,
+            client_id,
+            client_secret,
+            MISTICPAY_CREATE_PATH,
+            {
+                "amount": price,
+                "payerName": payer_name,
+                "payerDocument": DEFAULT_PAYMENT_CPF,
+                "transactionId": transaction_id,
+                "description": description,
+            },
+        )
+    except urllib.error.HTTPError as error:
+        detail = await asyncio.to_thread(error.read) if error.fp else b""
+        body = detail.decode("utf-8", errors="replace") if detail else error.reason
+        await status_message.edit_text(f"❌ Não foi possível criar o PIX:\n<code>{html.escape(str(body))}</code>")
+        return False
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        await status_message.edit_text(f"❌ Não foi possível criar o PIX:\n<code>{html.escape(str(error))}</code>")
+        return False
+
+    response = data.get("data") if isinstance(data, dict) else {}
+    response_transaction_id = str(response.get("transactionId") or transaction_id) if isinstance(response, dict) else transaction_id
+    response_status = str(response.get("transactionState") or "PENDENTE") if isinstance(response, dict) else "PENDENTE"
+    await save_transaction_record(
+        transaction_id=response_transaction_id,
+        user_id=user.id,
+        amount=price,
+        payer_name=payer_name,
+        payer_document=DEFAULT_PAYMENT_CPF,
+        description=description,
+        status=response_status,
+        raw_response=data,
+        plan_id=plan_id,
+        plan_target_type=target_type,
+        plan_target_id=target_id,
+    )
+    bot_me = await bot.get_me()
+    payment_message = await send_pix_result(
+        status_message,
+        data,
+        user,
+        bot_me.username or "",
+        result_keyboard(user.id, source_message.message_id),
+    )
+    asyncio.create_task(delete_messages_later(bot, source_message.chat.id, [payment_message.message_id], 600))
+    await send_payment_notifications(
+        bot,
+        (
+            "<b>📣 MisticPay - Compra de plano</b>\n\n"
+            f"° <b>Plano:</b> <code>{html.escape(plan_name)}</code>\n"
+            f"° <b>Transaction Id:</b> <code>{html.escape(response_transaction_id)}</code>\n"
+            f"° <b>Valor:</b> <code>R$ {price:.2f}</code>"
+        ),
+        (
+            "<b>📜 MisticPay - Compra de plano</b>\n\n"
+            f"° <b>Usuário:</b> {build_user_mention(user)}\n"
+            f"° <b>Plano:</b> <code>{html.escape(plan_name)}</code>\n"
+            f"° <b>Transaction Id:</b> <code>{html.escape(response_transaction_id)}</code>\n"
+            f"° <b>Status:</b> <code>{html.escape(response_status)}</code>"
+        ),
+    )
+    return True
+
+
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
     is_new_user = await register_user(message)
@@ -2927,6 +3017,27 @@ async def start_handler(message: Message) -> None:
                 caption="📄 Seu resultado foi enviado em arquivo.",
                 reply_markup=private_keyboard,
             )
+        return
+    if len(parts) == 2 and parts[1].startswith("buy_"):
+        try:
+            plan_id = int(parts[1][4:])
+        except ValueError:
+            await message.answer("❌ Link de compra inválido. Abra a página de planos e tente novamente.")
+            return
+        allowed, channel = await has_required_channel_access(message.bot, message.from_user.id)
+        if not allowed:
+            await message.answer(
+                "⚠️ Para comprar um plano, entre primeiro no canal/grupo obrigatório e toque em <b>Já entrei</b>.",
+                reply_markup=required_channel_keyboard(channel),
+            )
+            return
+        plan = await get_plan(plan_id)
+        if plan and plan[2] == "group":
+            await message.answer(
+                "👥 Este plano é para grupos. Abra os planos dentro do grupo onde deseja liberar o acesso."
+            )
+            return
+        await create_plan_payment(message.bot, message, message.from_user, plan_id, "user", message.from_user.id)
         return
     await send_start(message.bot, message.chat.id, message.from_user)
 
@@ -3063,85 +3174,11 @@ async def buy_plan_handler(query: CallbackQuery) -> None:
             reply_markup=required_channel_keyboard(channel),
         )
         return await query.answer("Entre no canal/grupo obrigatório primeiro.", show_alert=True)
-    plan = await get_plan(int(query.data.rsplit(":", 1)[1]))
+    plan_id = int(query.data.rsplit(":", 1)[1])
     target_type = "user" if is_private_chat(query.message.chat) else "group"
     target_id = query.from_user.id if target_type == "user" else query.message.chat.id
-    if not plan or not plan[5] or plan[2] != target_type:
-        return await query.answer("Este plano não está disponível.", show_alert=True)
-    plan_id, plan_name, _, duration_days, price, _ = plan
-    misticpay_url, client_id, client_secret, _, _ = await get_misticpay_settings()
-    if not client_id or not client_secret:
-        return await query.answer("Os pagamentos ainda não foram configurados.", show_alert=True)
-
     await query.answer("Gerando PIX...")
-    status_message = await query.message.answer("⏳ Criando PIX do seu plano...")
-    transaction_id = uuid.uuid4().hex[:12]
-    payer_name = query.from_user.full_name or query.from_user.first_name or "usuario"
-    description = f"Plano {plan_name} - {duration_days} dias"
-    try:
-        data = await request_misticpay_json(
-            misticpay_url,
-            client_id,
-            client_secret,
-            MISTICPAY_CREATE_PATH,
-            {
-                "amount": price,
-                "payerName": payer_name,
-                "payerDocument": DEFAULT_PAYMENT_CPF,
-                "transactionId": transaction_id,
-                "description": description,
-            },
-        )
-    except urllib.error.HTTPError as error:
-        detail = await asyncio.to_thread(error.read) if error.fp else b""
-        body = detail.decode("utf-8", errors="replace") if detail else error.reason
-        await status_message.edit_text(f"❌ Não foi possível criar o PIX:\n<code>{html.escape(str(body))}</code>")
-        return
-    except (urllib.error.URLError, TimeoutError, ValueError) as error:
-        await status_message.edit_text(f"❌ Não foi possível criar o PIX:\n<code>{html.escape(str(error))}</code>")
-        return
-
-    response = data.get("data") if isinstance(data, dict) else {}
-    response_transaction_id = str(response.get("transactionId") or transaction_id) if isinstance(response, dict) else transaction_id
-    response_status = str(response.get("transactionState") or "PENDENTE") if isinstance(response, dict) else "PENDENTE"
-    await save_transaction_record(
-        transaction_id=response_transaction_id,
-        user_id=query.from_user.id,
-        amount=price,
-        payer_name=payer_name,
-        payer_document=DEFAULT_PAYMENT_CPF,
-        description=description,
-        status=response_status,
-        raw_response=data,
-        plan_id=plan_id,
-        plan_target_type=target_type,
-        plan_target_id=target_id,
-    )
-    bot_me = await query.bot.get_me()
-    payment_message = await send_pix_result(
-        status_message,
-        data,
-        query.from_user,
-        bot_me.username or "",
-        result_keyboard(query.from_user.id, query.message.message_id),
-    )
-    asyncio.create_task(delete_messages_later(query.bot, query.message.chat.id, [payment_message.message_id], 600))
-    await send_payment_notifications(
-        query.bot,
-        (
-            "<b>📣 MisticPay - Compra de plano</b>\n\n"
-            f"° <b>Plano:</b> <code>{html.escape(plan_name)}</code>\n"
-            f"° <b>Transaction Id:</b> <code>{html.escape(response_transaction_id)}</code>\n"
-            f"° <b>Valor:</b> <code>R$ {price:.2f}</code>"
-        ),
-        (
-            "<b>📜 MisticPay - Compra de plano</b>\n\n"
-            f"° <b>Usuário:</b> {build_user_mention(query.from_user)}\n"
-            f"° <b>Plano:</b> <code>{html.escape(plan_name)}</code>\n"
-            f"° <b>Transaction Id:</b> <code>{html.escape(response_transaction_id)}</code>\n"
-            f"° <b>Status:</b> <code>{html.escape(response_status)}</code>"
-        ),
-    )
+    await create_plan_payment(query.bot, query.message, query.from_user, plan_id, target_type, target_id)
 
 
 @router.callback_query(F.data.startswith("bases:category:"))
