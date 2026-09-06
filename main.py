@@ -98,10 +98,12 @@ DEFAULT_BASES = [
     {"name": "📡 Consulta CpF v2", "online": True, "url": "/api/consulta/cpf/v2?apikey=SeuToken&code=88222144634"},
     {"name": "📡 Consulta CpF v3 Com foto do RJ MA RO SP CE BA", "online": True, "url": "/api/consulta/cpf/v3?apikey=SeuToken&code=88222144634"},
     {"name": "📡 Consulta CpF v4", "online": True, "url": "/api/consulta/cpf/v4?apikey=SeuToken&code=12537664795"},
-    {"name": "📡 Consulta CpF v5 Completo", "online": True, "url": "/api/consulta/cpf/v4?apikey=SeuToken&code=12537664795"},
+    {"name": "📡 Consulta CpF v5", "online": True, "url": "/api/consulta/cpf/v4?apikey=SeuToken&code=12537664795"},
+    {"name": "📡 Consulta CpF v6 Completo", "online": True, "url": "/api/consulta/cpf/v4?apikey=SeuToken&code=12537664795"},
     {"name": "📡 Consulta Cpf dadsus", "online": True, "url": "/api/consulta/cpfsus/v1?apikey=SeuToken&cpf=00005683505"},
-    {"name": "📸 Consulta fotonacional", "online": True, "url": "/api/consulta/fotonaci/v1?apikey=SeuToken&cpf=00005683505"},
-    {"name": "📡 Consulta inss", "online": False, "url": "/api/consulta/inss/v1?apikey=SeuToken&cpf=86712780268"},
+    {"name": "📸 Consulta fotonacional", "online": False, "url": "/api/consulta/fotonaci/v1?apikey=SeuToken&cpf=02632149746"},
+    {"name": "📡 Consulta inss", "online": True, "url": "/api/consulta/inss/v1?apikey=SeuToken&cpf=86712780268"},
+    {"name": "📡 Consulta frota", "online": False, "url": "/api/consulta/frota/v1?apikey=SeuToken&code=79961886968"},
     {"name": "📡 Consulta Score", "online": True, "url": "/api/consulta/score/v1?apikey=SeuToken&cpf=86712780268"},
     {"name": "📸 Consulta Fotope v1", "online": True, "url": "/api/consulta/fotope/v1?apikey=SeuToken&nome=JOSENILDA%20MARIA%20DE%20ARRUDA"},
     {"name": "👤 Consulta Nome v1", "online": True, "url": "/api/consulta/nome/v1?apikey=SeuToken&nome=PEDRO%20ADAO%20FERREIRA%20DA%20SILVA"},
@@ -110,9 +112,10 @@ DEFAULT_BASES = [
     {"name": "🚙 Consulta Placa v2", "online": True, "url": "/api/consulta/placa/v2?apikey=SeuToken&placa=MIT9067"},
     {"name": "🚙 Consulta Placa v3", "online": True, "url": "/api/consulta/placa/v3?apikey=SeuToken&placa=ABC1234"},
     {"name": "📞 Consulta Telefone v1", "online": True, "url": "/api/consulta/telefone/v1?apikey=SeuToken&telefone=93991415396"},
-    {"name": "📞 Consulta Telefone v2", "online": False, "url": "/api/consulta/telefone/v2?apikey=SeuToken&telefone=81982112719"},
+    {"name": "📞 Consulta Telefone v2", "online": True, "url": "/api/consulta/telefone/v2?apikey=SeuToken&telefone=81982112719"},
+    {"name": "📞 Consulta Telefone v3 2026", "online": True, "url": "/api/consulta/telefone/v3?apikey=SeuToken&telefone=81982112719"},
     {"name": "⚙️ Consulta Email v1", "online": True, "url": "/api/consulta/email/v1?apikey=SeuToken&email=marcelo_polli%40terra.com.br"},
-    {"name": "🌐 Consulta Cep v1", "online": False, "url": "/api/consulta/cep/v1?apikey=SeuToken&cep=11436100"},
+    {"name": "🌐 Consulta Cep v1", "online": True, "url": "/api/consulta/cep/v1?apikey=SeuToken&cep=11436100"},
     {"name": "🗺️ Consulta CNPJ v1", "online": True, "url": "/api/consulta/cnpj/v1?apikey=SeuToken&cnpj=00910509000171"},
     {"name": "🗺️ Consulta CNPJ FGTS", "online": True, "url": "/api/consulta/cnpjFGTS/v2?apikey=SeuToken&cnpj=00910509000171"},
     {"name": "🧰 Consulta Motor v1", "online": True, "url": "/api/consulta/motor/v1?apikey=SeuToken&motor=GFG138175"},
@@ -156,6 +159,13 @@ API_COMMANDS = [
     {
         "aliases": ["cpf5"],
         "title": "Consulta CPF v5",
+        "path": "api/consulta/cpf/v4",
+        "param": "code",
+        "example": "00005683505",
+    },
+    {
+        "aliases": ["cpf6"],
+        "title": "Consulta CPF v6",
         "path": "api/consulta/cpf/v4",
         "param": "code",
         "example": "00005683505",
@@ -206,6 +216,13 @@ API_COMMANDS = [
         "aliases": ["telefone2"],
         "title": "Consulta Telefone v2",
         "path": "api/consulta/telefone/v2",
+        "param": "telefone",
+        "example": "81982112719",
+    },
+    {
+        "aliases": ["telefone3"],
+        "title": "Consulta Telefone v3",
+        "path": "api/consulta/telefone/v3",
         "param": "telefone",
         "example": "81982112719",
     },
@@ -286,6 +303,13 @@ API_COMMANDS = [
         "param": "cpf",
         "example": "86712780268",
     },
+    {
+        "aliases": ["frota"],
+        "title": "Consulta Frota",
+        "path": "api/consulta/frota/v1",
+        "param": "code",
+        "example": "79961886968",
+    },
 ]
 
 API_COMMAND_LOOKUP = {
@@ -298,17 +322,18 @@ API_COMMAND_LOOKUP = {
 # obrigar o usuário a reenviar o comando. As consultas sem alternativa seguem
 # usando apenas a base escolhida.
 FALLBACK_COMMAND_GROUPS = {
-    "cpf": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpf1": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpf2": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpf3": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpf4": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpf5": ("cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "inss", "foto"),
-    "cpfsus": ("cpfsus", "cpf", "cpf2", "cpf3", "cpf4", "score", "inss", "foto"),
-    "score": ("score", "cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "inss", "foto"),
-    "inss": ("inss", "cpf", "cpf2", "cpf3", "cpf4", "cpfsus", "score", "foto"),
-    "foto": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpfsus", "score", "inss"),
-    "fotonacional": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpfsus", "score", "inss"),
+    "cpf": ("cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf1": ("cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf2": ("cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf3": ("cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf4": ("cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf5": ("cpf5", "cpf", "cpf2", "cpf3", "cpf4", "cpf6", "cpfsus", "score", "inss", "foto"),
+    "cpf6": ("cpf6", "cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpfsus", "score", "inss", "foto"),
+    "cpfsus": ("cpfsus", "cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "score", "inss", "foto"),
+    "score": ("score", "cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "inss", "foto"),
+    "inss": ("inss", "cpf", "cpf2", "cpf3", "cpf4", "cpf5", "cpf6", "cpfsus", "score", "foto"),
+    "foto": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpf5", "cpf6", "cpfsus", "score", "inss"),
+    "fotonacional": ("foto", "cpf3", "cpf4", "cpf2", "cpf", "cpf5", "cpf6", "cpfsus", "score", "inss"),
     "fotope": ("fotope", "nome", "nome2"),
     "nome": ("nome", "nome2", "fotope"),
     "nome1": ("nome", "nome2", "fotope"),
@@ -317,9 +342,10 @@ FALLBACK_COMMAND_GROUPS = {
     "placa1": ("placa", "placa2", "placa3"),
     "placa2": ("placa", "placa2", "placa3"),
     "placa3": ("placa", "placa2", "placa3"),
-    "telefone": ("telefone", "telefone2"),
-    "telefone1": ("telefone", "telefone2"),
-    "telefone2": ("telefone", "telefone2"),
+    "telefone": ("telefone", "telefone2", "telefone3"),
+    "telefone1": ("telefone", "telefone2", "telefone3"),
+    "telefone2": ("telefone2", "telefone", "telefone3"),
+    "telefone3": ("telefone3", "telefone", "telefone2"),
     "cnpj": ("cnpj", "cnpjfgts"),
     "cnpjfgts": ("cnpjfgts", "cnpj"),
 }
@@ -340,6 +366,7 @@ BASE_COMMAND_EXAMPLES = {
     "cpf3": "cpf3",
     "cpf4": "cpf4",
     "cpf5": "cpf5",
+    "cpf6": "cpf6",
     "nome": "nome",
     "nome2": "nome2",
     "placa": "placa",
@@ -347,6 +374,7 @@ BASE_COMMAND_EXAMPLES = {
     "placa3": "placa3",
     "telefone": "telefone",
     "telefone2": "telefone2",
+    "telefone3": "telefone3",
     "email": "email",
     "cep": "cep",
     "cnpj": "cnpj",
@@ -359,6 +387,7 @@ BASE_COMMAND_EXAMPLES = {
     "fotope": "fotope",
     "cpfsus": "cpfsus",
     "inss": "inss",
+    "frota": "frota",
 }
 
 MISTICPAY_CREATE_PATH = "api/transactions/create"
@@ -393,6 +422,8 @@ async def setup_database() -> None:
             await database.execute("ALTER TABLE settings ADD COLUMN api_base_url TEXT")
         if "api_key" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN api_key TEXT")
+        if "api_enabled" not in columns:
+            await database.execute("ALTER TABLE settings ADD COLUMN api_enabled INTEGER")
         if "misticpay_url" not in columns:
             await database.execute("ALTER TABLE settings ADD COLUMN misticpay_url TEXT")
         if "misticpay_client_id" not in columns:
@@ -440,6 +471,10 @@ async def setup_database() -> None:
         await database.execute(
             "UPDATE settings SET api_key = ? WHERE api_key IS NULL",
             ("",),
+        )
+        await database.execute(
+            "UPDATE settings SET api_enabled = ? WHERE api_enabled IS NULL",
+            (1,),
         )
         await database.execute(
             "UPDATE settings SET misticpay_url = ? WHERE misticpay_url IS NULL",
@@ -750,15 +785,15 @@ async def get_group_welcome_configs() -> list[dict]:
     ]
 
 
-async def get_api_settings() -> tuple[str, str]:
+async def get_api_settings() -> tuple[str, str, bool]:
     async with aiosqlite.connect(DB_PATH) as database:
         cursor = await database.execute(
-            "SELECT api_base_url, api_key FROM settings WHERE id = 1"
+            "SELECT api_base_url, api_key, api_enabled FROM settings WHERE id = 1"
         )
         row = await cursor.fetchone()
     if not row:
-        return DEFAULT_API_BASE_URL, ""
-    return (row[0] or DEFAULT_API_BASE_URL, row[1] or "")
+        return DEFAULT_API_BASE_URL, "", True
+    return (row[0] or DEFAULT_API_BASE_URL, row[1] or "", bool(row[2] if row[2] is not None else 1))
 
 
 async def get_misticpay_settings() -> tuple[str, str, str, str, str]:
@@ -802,15 +837,15 @@ async def save_photo(file_id: str | None) -> None:
         await database.commit()
 
 
-async def save_api_settings(api_base_url: str, api_key: str) -> None:
+async def save_api_settings(api_base_url: str, api_key: str, api_enabled: bool) -> None:
     async with aiosqlite.connect(DB_PATH) as database:
         await database.execute(
             """
             UPDATE settings
-            SET api_base_url = ?, api_key = ?, updated_at = CURRENT_TIMESTAMP
+            SET api_base_url = ?, api_key = ?, api_enabled = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = 1
             """,
-            (api_base_url, api_key),
+            (api_base_url, api_key, int(api_enabled)),
         )
         await database.commit()
 
@@ -920,6 +955,10 @@ async def get_bases() -> list[dict]:
                         }
                     )
             if normalized:
+                known_names = {base["name"] for base in normalized}
+                normalized.extend(
+                    base.copy() for base in DEFAULT_BASES if base["name"] not in known_names
+                )
                 return normalized
     except (json.JSONDecodeError, TypeError):
         pass
@@ -1112,7 +1151,7 @@ def extract_command_name_from_base(base: dict) -> str | None:
 
     url = (base.get("url") or "").strip()
     name_text = (base.get("name") or "").strip().lower()
-    known_commands = r"(cpf|nome|placa|telefone|email|cep|cnpj|motor|chassi|score|inss|cpfsus|fotonaci|fotope)"
+    known_commands = r"(cpf|nome|placa|telefone|email|cep|cnpj|motor|chassi|score|inss|cpfsus|fotonaci|fotope|frota)"
 
     if not url:
         url = ""
@@ -1146,6 +1185,8 @@ def extract_command_name_from_base(base: dict) -> str | None:
         return "cpf3"
     if command == "cpf" and version == "v5":
         return "cpf5"
+    if command == "cpf" and version == "v6":
+        return "cpf6"
     if command == "nome" and version == "v1":
         return "nome"
     if command == "nome" and version == "v2":
@@ -1160,6 +1201,8 @@ def extract_command_name_from_base(base: dict) -> str | None:
         return "telefone"
     if command == "telefone" and version == "v2":
         return "telefone2"
+    if command == "telefone" and version == "v3":
+        return "telefone3"
     if command == "foto":
         return "fotope" if "pe" in name_text else "foto"
     if command == "email":
@@ -1180,6 +1223,8 @@ def extract_command_name_from_base(base: dict) -> str | None:
         return "cpfsus"
     if command == "inss":
         return "inss"
+    if command == "frota":
+        return "frota"
     if command and version.startswith("v"):
         return f"{command}{version[1:]}"
     return command or None
@@ -2447,13 +2492,19 @@ def private_result_keyboard(user_id: int, command_message_id: int) -> InlineKeyb
     ]])
 
 
-def api_admin_keyboard() -> InlineKeyboardMarkup:
+def api_admin_keyboard(api_enabled: bool = True) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="🌐 Base URL", callback_data="admin:api_base"),
                 InlineKeyboardButton(text="🔐 Key/token", callback_data="admin:api_key"),
             ],
+            [InlineKeyboardButton(
+                text="Desativar API padrao" if api_enabled else "Ativar API padrao",
+                callback_data="admin:api_toggle",
+            )],
+            [InlineKeyboardButton(text="✏️ Alterar base", callback_data="admin:api_base")],
+            [InlineKeyboardButton(text="🔐 Alterar key", callback_data="admin:api_key")],
             [InlineKeyboardButton(text="⬅️ Voltar", callback_data="admin:back")],
         ],
     )
@@ -3853,16 +3904,37 @@ async def api_menu_handler(query: CallbackQuery, state: FSMContext) -> None:
         return await query.answer("Sem permissão.", show_alert=True)
 
     await state.clear()
-    api_base_url, api_key = await get_api_settings()
+    api_base_url, api_key, api_enabled = await get_api_settings()
     masked_key = "•" * min(len(api_key), 12) if api_key else "não configurada"
     await query.message.edit_text(
         "<b>🔑 Configurar API</b>\n\n"
+        f"Uso da API padrao: <code>{'ativado' if api_enabled else 'desativado'}</code>\n"
         f"Base atual: <code>{html.escape(api_base_url)}</code>\n"
         f"Key atual: <code>{html.escape(masked_key)}</code>\n\n"
         "Aqui o admin pode trocar a base padrão e cadastrar a key da API.",
-        reply_markup=api_admin_keyboard(),
+        reply_markup=api_admin_keyboard(api_enabled),
     )
     await query.answer()
+
+
+@router.callback_query(F.data == "admin:api_toggle")
+async def api_toggle_handler(query: CallbackQuery) -> None:
+    if not is_admin(query.from_user.id):
+        return await query.answer("Sem permissao.", show_alert=True)
+
+    api_base_url, api_key, api_enabled = await get_api_settings()
+    api_enabled = not api_enabled
+    await save_api_settings(api_base_url, api_key, api_enabled)
+    masked_key = "*" * min(len(api_key), 12) if api_key else "nao configurada"
+    await query.message.edit_text(
+        "<b>Configurar API</b>\n\n"
+        f"Uso da API padrao: <code>{'ativado' if api_enabled else 'desativado'}</code>\n"
+        f"Base atual: <code>{html.escape(api_base_url)}</code>\n"
+        f"Key atual: <code>{html.escape(masked_key)}</code>\n\n"
+        "Aqui o admin pode trocar a base padrao e cadastrar a key da API.",
+        reply_markup=api_admin_keyboard(api_enabled),
+    )
+    await query.answer("API padrao ativada." if api_enabled else "API padrao desativada.")
 
 
 @router.callback_query(F.data == "admin:api_base")
@@ -3892,9 +3964,10 @@ async def receive_api_base_handler(message: Message, state: FSMContext) -> None:
             reply_markup=cancel_keyboard(),
         )
 
-    await save_api_settings(api_base_url, (await get_api_settings())[1])
+    _, api_key, api_enabled = await get_api_settings()
+    await save_api_settings(api_base_url, api_key, api_enabled)
     await state.clear()
-    await message.answer("✅ Base da API salva com sucesso.", reply_markup=api_admin_keyboard())
+    await message.answer("✅ Base da API salva com sucesso.", reply_markup=api_admin_keyboard(api_enabled))
 
 
 @router.callback_query(F.data == "admin:api_key")
@@ -3920,10 +3993,10 @@ async def receive_api_key_handler(message: Message, state: FSMContext) -> None:
     if api_key.lower() == "remover":
         api_key = ""
 
-    api_base_url, _ = await get_api_settings()
-    await save_api_settings(api_base_url, api_key)
+    api_base_url, _, api_enabled = await get_api_settings()
+    await save_api_settings(api_base_url, api_key, api_enabled)
     await state.clear()
-    await message.answer("✅ Key/token salvo com sucesso.", reply_markup=api_admin_keyboard())
+    await message.answer("✅ Key/token salvo com sucesso.", reply_markup=api_admin_keyboard(api_enabled))
 
 
 @router.callback_query(F.data == "admin:plans")
@@ -4666,7 +4739,10 @@ async def dynamic_api_command_handler(message: Message) -> None:
         command_name,
         value,
     )
-    api_base_url, api_key = await get_api_settings()
+    api_base_url, api_key, api_enabled = await get_api_settings()
+    if not api_enabled:
+        await message.answer("A API padrao esta desativada no /admin.")
+        return
     if not api_key:
         await message.answer("A key da API ainda não foi configurada no /admin.")
         return
@@ -4750,7 +4826,10 @@ async def chassi_handler(message: Message) -> None:
         return
 
     chassi = parts[1].strip()
-    api_base_url, api_key = await get_api_settings()
+    api_base_url, api_key, api_enabled = await get_api_settings()
+    if not api_enabled:
+        await message.answer("A API padrao esta desativada no /admin.")
+        return
     if not api_key:
         await message.answer("A key da API ainda não foi configurada no /admin.")
         return
