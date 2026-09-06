@@ -3618,8 +3618,13 @@ async def broadcast_menu_handler(query: CallbackQuery, state: FSMContext) -> Non
     await query.answer()
 
 
-@router.message(AdminState.waiting_broadcast_text, F.text)
-async def receive_broadcast_text(message: Message, state: FSMContext) -> None:
+    await query.message.answer(
+        "Para usar emoji premium, midia ou formatacao do Telegram, envie/encaminhe a mensagem pronta aqui. O bot vai copiar para todos."
+    )
+
+
+@router.message(AdminState.waiting_broadcast_text)
+async def receive_broadcast_message(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
 
@@ -3633,14 +3638,21 @@ async def receive_broadcast_text(message: Message, state: FSMContext) -> None:
     status = await message.answer(f"⏳ Enviando broadcast para <code>{len(users)}</code> usuários...")
     for user_data in users:
         try:
-            fake_user = type("BroadcastUser", (), {
-                "id": user_data["id"],
-                "first_name": user_data["first_name"],
-                "last_name": user_data["last_name"],
-                "username": user_data["username"],
-            })()
-            text = render_group_welcome(message.text, fake_user, message.chat)
-            await message.bot.send_message(user_data["id"], text, parse_mode=ParseMode.HTML)
+            if message.text and re.search(r"\{(ID|NAME|USERNAME|MENTION)\}", message.text):
+                fake_user = type("BroadcastUser", (), {
+                    "id": user_data["id"],
+                    "first_name": user_data["first_name"],
+                    "last_name": user_data["last_name"],
+                    "username": user_data["username"],
+                })()
+                text = render_group_welcome(message.text, fake_user, message.chat)
+                await message.bot.send_message(user_data["id"], text, parse_mode=ParseMode.HTML)
+            else:
+                await message.bot.copy_message(
+                    chat_id=user_data["id"],
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
             sent += 1
         except Exception:
             failed += 1
