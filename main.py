@@ -121,6 +121,7 @@ DEFAULT_BASES = [
     {"name": "🧰 Consulta Motor v1", "online": True, "url": "/api/consulta/motor/v1?apikey=SeuToken&motor=GFG138175"},
     {"name": "⚙️ Consulta Chassi v1", "online": True, "url": "/api/consulta/chassi/v1?apikey=SeuToken&chassi=9BGKL48U0"},
 ]
+DEFAULT_BASE_NAMES = {base["name"] for base in DEFAULT_BASES}
 
 DEFAULT_API_BASE_URL = "http://node.tconect.xyz:1116/"
 DEFAULT_MISTICPAY_URL = "https://api.misticpay.com/"
@@ -974,6 +975,28 @@ async def save_bases(bases: list[dict]) -> None:
         await database.commit()
 
 
+def is_default_base(base: dict) -> bool:
+    return base.get("name") in DEFAULT_BASE_NAMES
+
+
+def disable_non_default_bases(bases: list[dict]) -> list[dict]:
+    updated = []
+    for base in bases:
+        copy = dict(base)
+        if not is_default_base(copy):
+            copy["online"] = False
+        updated.append(copy)
+    return updated
+
+
+async def get_user_bases() -> list[dict]:
+    bases = await get_bases()
+    _, _, api_enabled = await get_api_settings()
+    if api_enabled:
+        return [base for base in bases if is_default_base(base)]
+    return bases
+
+
 # -----------------------------------------------------------------------------
 # Conteúdo e validação
 # -----------------------------------------------------------------------------
@@ -1268,7 +1291,11 @@ async def get_command_spec(command_name: str) -> dict | None:
     if spec:
         return spec
 
-    for base in await get_bases():
+    _, _, api_enabled = await get_api_settings()
+    if api_enabled:
+        return None
+
+    for base in await get_user_bases():
         base_command = extract_command_name_from_base(base)
         if base_command and normalize_command_name(base_command) == command_name:
             return build_base_command_spec(base, command_name)
@@ -1611,7 +1638,7 @@ async def web_result_api(token: str) -> dict:
 @web_app.get("/api/bases")
 async def web_bases_api() -> dict:
     commands = []
-    for base in await get_bases():
+    for base in await get_user_bases():
         command_name = extract_command_name_from_base(base)
         if not command_name:
             continue
@@ -2322,7 +2349,7 @@ async def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict
         for candidate in ordered
         if not (candidate["path"] in unique_paths or unique_paths.add(candidate["path"]))
     ]
-    bases = await get_bases()
+    bases = await get_user_bases()
     configured = {
         extract_command_name_from_base(base): bool(base.get("online"))
         for base in bases
@@ -2336,7 +2363,7 @@ async def fallback_specs_for(command_name: str, primary_spec: dict) -> list[dict
 
 
 async def configured_url_for_spec(spec: dict) -> str:
-    bases = await get_bases()
+    bases = await get_user_bases()
     aliases = {normalize_command_name(alias) for alias in spec["aliases"]}
     for base in bases:
         command_name = extract_command_name_from_base(base)
@@ -3186,7 +3213,7 @@ async def required_channel_check_handler(query: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "start:bases")
 async def bases_handler(query: CallbackQuery) -> None:
-    bases = await get_bases()
+    bases = await get_user_bases()
     await query.message.answer(
         "<b>📚 Bases disponíveis</b>\n\nEscolha uma categoria:",
         reply_markup=bases_keyboard(bases),
@@ -3235,7 +3262,7 @@ async def buy_plan_handler(query: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("bases:category:"))
 async def bases_category_handler(query: CallbackQuery) -> None:
     index = int(query.data.rsplit(":", 1)[1])
-    bases = await get_bases()
+    bases = await get_user_bases()
     if not 0 <= index < len(bases):
         return await query.answer("Categoria não encontrada.", show_alert=True)
     name, online = bases[index]["name"], bases[index]["online"]
@@ -3343,6 +3370,9 @@ async def admin_base_toggle_handler(query: CallbackQuery) -> None:
     bases = await get_bases()
     if not 0 <= index < len(bases):
         return await query.answer("Base não encontrada.", show_alert=True)
+    _, _, api_enabled = await get_api_settings()
+    if api_enabled and not is_default_base(bases[index]) and not bases[index].get("online"):
+        return await query.answer("Desative a API padrao para ligar bases custom.", show_alert=True)
     bases[index]["online"] = not bases[index]["online"]
     await save_bases(bases)
     base = bases[index]
@@ -3925,6 +3955,8 @@ async def api_toggle_handler(query: CallbackQuery) -> None:
     api_base_url, api_key, api_enabled = await get_api_settings()
     api_enabled = not api_enabled
     await save_api_settings(api_base_url, api_key, api_enabled)
+    if api_enabled:
+        await save_bases(disable_non_default_bases(await get_bases()))
     masked_key = "*" * min(len(api_key), 12) if api_key else "nao configurada"
     await query.message.edit_text(
         "<b>Configurar API</b>\n\n"
